@@ -1,0 +1,55 @@
+name: backend-rs
+
+on:
+  push:
+    paths:
+      - "backend-rs/**"
+      - "gateway-go/**"
+      - ".github/workflows/backend-rs.yml"
+  pull_request:
+    paths:
+      - "backend-rs/**"
+      - "gateway-go/**"
+      - ".github/workflows/backend-rs.yml"
+
+jobs:
+  rust-core:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-rs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install OpenSSL dev (native-tls)
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend-rs
+      - name: Format check
+        run: cargo fmt --check
+      - name: Clippy
+        run: cargo clippy --all-targets
+      - name: Build
+        run: cargo build --release
+      - name: Test (parity)
+        run: cargo test --release
+
+  go-gateway:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: gateway-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: Vet
+        run: go vet ./...
+      - name: Build
+        run: go build ./...
+      - name: Test
+        run: go test ./...

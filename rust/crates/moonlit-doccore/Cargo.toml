@@ -1,0 +1,15 @@
+[package]
+name = "moonlit-doccore"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "yrs-based port of DocForge doc-core: Word/PPT IR, Yjs bindings, mutation/observe/export/hash contract."
+
+[dependencies]
+moonlit-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+yrs.workspace = true

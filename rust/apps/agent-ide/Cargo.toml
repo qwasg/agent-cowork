@@ -1,0 +1,24 @@
+[package]
+name = "moonlit-agent-ide"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Native Rust Agent IDE shell."
+
+[dependencies]
+moonlit-api.workspace = true
+moonlit-core.workspace = true
+moonlit-uikit = { workspace = true, features = ["gpui-backend"] }
+gpui.workspace = true
+tokio = { workspace = true }
+futures-util.workspace = true
+futures-channel.workspace = true
+rfd.workspace = true
+open.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

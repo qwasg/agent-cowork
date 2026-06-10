@@ -1,0 +1,24 @@
+{
+  "name": "docforge-core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DocForge-Core: 文档实时编译/预览引擎 (Word/PPT)",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "test:run": "pnpm -r test:run",
+    "typecheck": "pnpm -r typecheck",
+    "demo:doc-core": "pnpm --filter @docforge/doc-core demo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.5.0"
+}

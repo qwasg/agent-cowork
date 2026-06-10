@@ -1,0 +1,259 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #e3e6ea;
+  --accent: #2f6fed;
+  --text: #1f2329;
+  --muted: #8a9099;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 10px 18px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.3px;
+}
+
+.mode-tabs button {
+  border: 1px solid var(--border);
+  background: #fff;
+  padding: 6px 18px;
+  margin-right: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.mode-tabs button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.tauri-panel {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.tauri-panel button {
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 5px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.tauri-panel code {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.conn-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 18px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.conn-bar .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #c9ced6;
+}
+.conn-bar .dot.connected {
+  background: #2bb673;
+}
+.conn-bar .dot.connecting {
+  background: #f5a623;
+}
+.conn-bar .dot.disconnected {
+  background: #e0533d;
+}
+.status-label {
+  margin-left: auto;
+}
+
+.editor-pane {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+/* ---------- Word ---------- */
+.word-editor {
+  max-width: 820px;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: #fff;
+}
+
+.toolbar button {
+  min-width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  background: #fff;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.toolbar button.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.toolbar .sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 6px;
+}
+
+.word-surface {
+  min-height: 60vh;
+  padding: 28px 40px;
+  outline: none;
+  line-height: 1.7;
+}
+.word-surface:focus {
+  outline: none;
+}
+.word-surface h1 {
+  font-size: 26px;
+}
+.word-surface h2 {
+  font-size: 21px;
+}
+
+/* ---------- PPT ---------- */
+.ppt-editor {
+  display: flex;
+  gap: 16px;
+  height: 100%;
+}
+
+.ppt-sidebar {
+  width: 180px;
+  flex-shrink: 0;
+}
+
+.ppt-controls {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.ppt-controls select {
+  flex: 1;
+}
+.ppt-controls button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 0 8px;
+}
+
+.slide-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.slide-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  background: #fff;
+  font-size: 13px;
+}
+.slide-list li.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.slide-no {
+  font-weight: 700;
+  color: var(--accent);
+}
+.slide-layout {
+  color: var(--muted);
+}
+
+.ppt-stage-wrap {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+.ppt-stage {
+  border: 1px solid var(--border);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.08);
+  background: #fff;
+}
+.empty-hint {
+  color: var(--muted);
+  margin-top: 60px;
+}

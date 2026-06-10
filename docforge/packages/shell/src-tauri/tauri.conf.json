@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DocForge-Core",
+  "version": "0.1.0",
+  "identifier": "com.docforge.core",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @docforge/ui dev -- --host 127.0.0.1",
+    "beforeBuildCommand": "pnpm --filter @docforge/ui build",
+    "devUrl": "http://127.0.0.1:5173",
+    "frontendDist": "../../ui/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DocForge-Core",
+        "width": 1280,
+        "height": 820,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

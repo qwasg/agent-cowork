@@ -1,0 +1,36 @@
+# Agent Debug backend (Rust core + Go edge gateway).
+# Public surface is the Go gateway on :8002 (same contract as the old Python service).
+services:
+  agentd:
+    build: ./backend-rs
+    environment:
+      AGENT_DEBUG_HOST: "0.0.0.0"
+      AGENT_CORE_PORT: "8003"
+      AGENT_DEBUG_DATA_DIR: /data
+      # Provide LLM credentials here (optional; falls back to the mock provider):
+      # OPENAI_API_KEY: ""
+      # OPENAI_BASE_URL: "https://api.deepseek.com/v1"
+      # TAVILY_API_KEY: ""
+    volumes:
+      - agentd-data:/data
+    expose:
+      - "8003"
+
+  gateway:
+    build: ./gateway-go
+    environment:
+      AGENT_DEBUG_HOST: "0.0.0.0"
+      AGENT_DEBUG_HTTP_PORT: "8002"
+      AGENT_CORE_URL: "http://agentd:8003"
+      AGENT_DEBUG_DATA_DIR: /data
+      # AGENT_DEBUG_AUTH_TOKEN: "change-me"   # enable auth (REST + WS)
+      # AGENT_DEBUG_ALLOW_ORIGINS: "http://localhost:8030"
+    volumes:
+      - agentd-data:/data:ro
+    ports:
+      - "8002:8002"
+    depends_on:
+      - agentd
+
+volumes:
+  agentd-data: {}

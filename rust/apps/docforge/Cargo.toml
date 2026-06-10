@@ -1,0 +1,27 @@
+[package]
+name = "moonlit-docforge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Native Rust DocForge editor shell."
+
+[dependencies]
+moonlit-core.workspace = true
+moonlit-doccore.workspace = true
+moonlit-compile.workspace = true
+moonlit-preview.workspace = true
+moonlit-sync.workspace = true
+moonlit-uikit = { workspace = true, features = ["gpui-backend"] }
+gpui.workspace = true
+tokio = { workspace = true }
+futures-util.workspace = true
+futures-channel.workspace = true
+rfd.workspace = true
+open.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,25 @@
+# ---- build artifacts ----
+target/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.benchmarks/
+.venv/
+
+# ---- runtime data (backend) ----
+agent-sessions/
+agent_sessions.json
+server-out.log
+server-err.log
+*.log
+
+# ---- secrets / credentials (never commit) ----
+.agent_master.key
+agent_credentials.json
+agent_channels.json
+agent_users.json
+agent_search_config.json
+.env
+.env.local

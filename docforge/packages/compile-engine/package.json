@@ -1,0 +1,29 @@
+{
+  "name": "@docforge/compile-engine",
+  "version": "0.1.0",
+  "description": "IR→OOXML(docx/pptxgenjs)+ job queue(debounce/cancel/hash-cache)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./worker": "./src/worker.ts"
+  },
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "demo": "tsx src/demo.ts"
+  },
+  "dependencies": {
+    "@docforge/doc-core": "workspace:*",
+    "docx": "^9.0.3",
+    "pptxgenjs": "^3.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

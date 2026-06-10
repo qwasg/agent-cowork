@@ -1,0 +1,33 @@
+{
+  "name": "@docforge/ui",
+  "version": "0.1.0",
+  "description": "React 编辑器(word + ppt 双模式)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@docforge/doc-core": "workspace:*",
+    "@tauri-apps/api": "^2.2.0",
+    "@tiptap/extension-collaboration": "^2.10.3",
+    "@tiptap/extension-underline": "^2.10.3",
+    "@tiptap/pm": "^2.10.3",
+    "@tiptap/react": "^2.10.3",
+    "@tiptap/starter-kit": "^2.10.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "y-prosemirror": "^1.2.15",
+    "y-websocket": "^2.0.4",
+    "yjs": "^13.6.20"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}

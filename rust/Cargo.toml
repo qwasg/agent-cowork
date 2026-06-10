@@ -1,0 +1,74 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/moonlit-core",
+    "crates/moonlit-api",
+    "crates/moonlit-doccore",
+    "crates/moonlit-compile",
+    "crates/moonlit-preview",
+    "crates/moonlit-sync",
+    "crates/moonlit-uikit",
+    "apps/agent-ide",
+    "apps/docforge",
+]
+
+# GPUI support is exposed behind `moonlit-uikit/gpui-backend`. The default
+# workspace build uses the headless component model so Windows CI remains green
+# even when GPUI's platform backend is unavailable.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+authors = ["Moonlit"]
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+anyhow = "1"
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.23"
+futures-util = "0.3"
+futures-channel = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+yrs = "0.21"
+quick-xml = "0.36"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+similar = "2"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+gpui = "0.2.2"
+unicode-segmentation = "1"
+rfd = "0.15"
+open = "5"
+resvg = "0.45"
+usvg = "0.45"
+tiny-skia = "0.11"
+png = "0.17"
+
+# Shared crates
+moonlit-core = { path = "crates/moonlit-core" }
+moonlit-api = { path = "crates/moonlit-api" }
+moonlit-doccore = { path = "crates/moonlit-doccore" }
+moonlit-compile = { path = "crates/moonlit-compile" }
+moonlit-preview = { path = "crates/moonlit-preview" }
+moonlit-sync = { path = "crates/moonlit-sync" }
+moonlit-uikit = { path = "crates/moonlit-uikit" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+# Windows packaging via `cargo dist` (https://opensource.axo.dev/cargo-dist/).
+# Produces an MSI installer for the two GPUI apps. Run `dist build` after
+# installing the tool; the portable-zip fallback in packaging/build-windows.ps1
+# needs no extra tooling.
+[workspace.metadata.dist]
+cargo-dist-version = "0.28.0"
+installers = ["msi"]
+targets = ["x86_64-pc-windows-msvc"]
+ci = []
+install-updater = false

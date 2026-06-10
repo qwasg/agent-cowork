@@ -1,0 +1,28 @@
+{
+  "name": "@docforge/preview-engine",
+  "version": "0.1.0",
+  "description": "L1 IR→DOM;L2 soffice→png 缩略缓存(可插拔渲染 + 自搓 fallback)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "demo": "tsx src/demo.ts"
+  },
+  "dependencies": {
+    "@docforge/compile-engine": "workspace:*",
+    "@docforge/doc-core": "workspace:*",
+    "@resvg/resvg-js": "^2.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

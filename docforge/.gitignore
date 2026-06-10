@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+coverage/
+.cache/
+out/
+target/
+packages/shell/src-tauri/target/
+*.tsbuildinfo
+.docforge-cache/
+demo-output/

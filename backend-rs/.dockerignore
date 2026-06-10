@@ -1,0 +1,7 @@
+target
+*.redb
+agent-sessions
+.env
+.env.local
+.agent_master.key
+.agent_auth_secret

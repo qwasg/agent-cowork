@@ -1,0 +1,19 @@
+[package]
+name = "moonlit-preview"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "L1 native preview model + L2 soffice/resvg rasterization."
+
+[dependencies]
+moonlit-core.workspace = true
+moonlit-doccore.workspace = true
+moonlit-compile.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+resvg.workspace = true
+usvg.workspace = true
+tiny-skia.workspace = true

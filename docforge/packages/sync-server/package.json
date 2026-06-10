@@ -1,0 +1,33 @@
+{
+  "name": "@docforge/sync-server",
+  "version": "0.1.0",
+  "description": "localhost y-websocket room(UI 与 agent 共写同一 doc)",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "docforge-sync": "./src/cli.ts"
+  },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@docforge/doc-core": "workspace:*",
+    "lib0": "^0.2.99",
+    "y-protocols": "^1.0.6",
+    "ws": "^8.18.0",
+    "yjs": "^13.6.20"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
