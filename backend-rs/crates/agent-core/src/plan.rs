@@ -5,15 +5,15 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::contracts::events::EventDraft;
-use crate::contracts::models::{new_id, now_ts, ChatMessage, Plan, PlanStage, PlanTask};
-use crate::contracts::{ApiError, ApiResult};
-use crate::domain::session::SessionService;
-use crate::domain::todo::TodoEngine;
-use crate::infra::store::T_PLANS;
-use crate::infra::{EventBus, Store};
-use crate::provider::types::{noop_sink, ProviderRequest};
-use crate::provider::ProviderExecutionService;
+use crate::session::SessionService;
+use crate::todo::TodoEngine;
+use agent_protocol::events::EventDraft;
+use agent_protocol::models::{new_id, now_ts, ChatMessage, Plan, PlanStage, PlanTask, TodoItem};
+use agent_protocol::{ApiError, ApiResult};
+use agent_providers::types::{noop_sink, ProviderRequest};
+use agent_providers::ProviderExecutionService;
+use agent_store::store::T_PLANS;
+use agent_store::{EventBus, Store};
 
 pub struct PlanEngine {
     pub providers: Arc<ProviderExecutionService>,
@@ -77,8 +77,12 @@ impl PlanEngine {
         let mut todo_ids: Vec<String> = Vec::with_capacity(drafts.len());
         let mut tasks: Vec<PlanTask> = Vec::with_capacity(drafts.len());
         for (i, draft) in drafts.iter().enumerate() {
-            let mut dep_idx: Vec<usize> =
-                draft.depends_on.iter().copied().filter(|&d| d < i).collect();
+            let mut dep_idx: Vec<usize> = draft
+                .depends_on
+                .iter()
+                .copied()
+                .filter(|&d| d < i)
+                .collect();
             // Default rule: an edit task with no explicit dependencies depends
             // on every explore task — exploration always lands first.
             if dep_idx.is_empty() && draft.kind != "explore" {
@@ -94,7 +98,7 @@ impl PlanEngine {
             );
             self.bus.emit(
                 EventDraft::new(session_id, "todo.created", "todo").payload(
-                    json!({ "id": todo.id, "title": todo.title, "kind": todo.kind, "dependencies": deps }),
+                    json!({ "id": todo.id, "title": todo.title, "kind": todo.kind, "status": todo.status, "dependencies": deps }),
                 ),
             );
             tasks.push(PlanTask {
@@ -143,21 +147,76 @@ impl PlanEngine {
         }
 
         self.bus.emit(
-            EventDraft::new(session_id, "plan.generated", "plan")
-                .payload(json!({ "planId": plan_id, "objective": objective, "taskCount": todo_ids.len() })),
+            EventDraft::new(session_id, "plan.generated", "plan").payload(
+                json!({ "planId": plan_id, "objective": objective, "taskCount": todo_ids.len() }),
+            ),
         );
 
         Ok(json!({ "plan": plan }))
     }
 
-    async fn draft_tasks(&self, model: &str, objective: &str) -> Vec<DraftTask> {
-        let system = ChatMessage::system(
-            "你是规划器。把用户目标拆解为 2-5 个可执行子任务，先调研后实施。只输出一个 JSON 数组，\
-             每项为 {\"title\": string, \"kind\": \"explore\"|\"edit\", \"dependsOn\": number[]}。\
-             kind=explore 表示只读调研（读代码/搜索/收集信息），kind=edit 表示实施修改（写文件/执行命令）。\
-             dependsOn 是所依赖任务的数组下标（只能引用更靠前的任务，互相独立的任务留空数组）。\
-             调研类任务放在最前面且互相并行。不要输出其它文字。",
+    /// Assemble a reviewable Plan record from todos the agent already created
+    /// itself (agentic plan mode: the model researches read-only, then writes
+    /// the checklist via `todo_write`). The plan stays `ready` until the user
+    /// confirms execution — nothing runs here.
+    pub fn from_todos(&self, session_id: &str, objective: &str, todos: &[TodoItem]) -> Plan {
+        let plan_id = new_id("plan");
+        let stage_id = new_id("stage");
+        let tasks: Vec<PlanTask> = todos
+            .iter()
+            .map(|t| PlanTask {
+                id: t.id.clone(),
+                stage_id: stage_id.clone(),
+                title: t.title.clone(),
+                description: t.description.clone(),
+                priority: "medium".to_string(),
+                parallelism: if t.dependencies.is_empty() {
+                    "parallel".to_string()
+                } else {
+                    "serial".to_string()
+                },
+                depends_on: t.dependencies.clone(),
+                status: "pending".to_string(),
+                owner_type: "main-agent".to_string(),
+            })
+            .collect();
+        let stage = PlanStage {
+            id: stage_id,
+            plan_id: plan_id.clone(),
+            title: "执行阶段".to_string(),
+            order: 0,
+            status: "pending".to_string(),
+            tasks,
+        };
+        let plan = Plan {
+            id: plan_id.clone(),
+            session_id: session_id.to_string(),
+            objective: objective.to_string(),
+            status: "ready".to_string(),
+            current_version_id: new_id("ver"),
+            latest_execution_id: None,
+            stages: vec![stage],
+            created_at: now_ts(),
+            updated_at: now_ts(),
+        };
+        self.save(&plan);
+
+        if let Ok(mut session) = self.sessions.get(session_id) {
+            session.active_plan_id = Some(plan_id.clone());
+            session.touch();
+            self.sessions.save(&session);
+        }
+
+        self.bus.emit(
+            EventDraft::new(session_id, "plan.generated", "plan").payload(
+                json!({ "planId": plan_id, "objective": objective, "taskCount": todos.len() }),
+            ),
         );
+        plan
+    }
+
+    async fn draft_tasks(&self, model: &str, objective: &str) -> Vec<DraftTask> {
+        let system = ChatMessage::system(crate::prompts::PLAN_DRAFT_SYSTEM_PROMPT);
         let user = ChatMessage::user(format!("目标：{objective}"));
         let req = ProviderRequest {
             model: model.to_string(),
@@ -165,7 +224,8 @@ impl PlanEngine {
             tools: vec![],
             temperature: Some(0.3),
             stream: false,
-            max_tokens: Some(512),
+            // Descriptions are part of the contract now; 512 was too tight.
+            max_tokens: Some(1024),
         };
         let sink = noop_sink();
         if let Ok(resp) = self.providers.execute(&req, &sink, None).await {

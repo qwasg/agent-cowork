@@ -1,0 +1,36 @@
+[package]
+name = "agent-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Agent tool registry: filesystem, command, web, skill tools + search config"
+
+[dependencies]
+agent-protocol = { workspace = true }
+agent-config = { workspace = true }
+agent-store = { workspace = true }
+agent-providers = { workspace = true }
+
+async-trait = { workspace = true }
+tokio-util = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+url = { workspace = true }
+ignore = { workspace = true }
+regex = { workspace = true }
+dunce = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+# document tools (Word / PPT / PDF)
+moonlit-core = { workspace = true }
+moonlit-doccore = { workspace = true }
+moonlit-compile = { workspace = true }
+zip = { workspace = true }
+quick-xml = { workspace = true }
+pdf-extract = { workspace = true }
+printpdf = { workspace = true }

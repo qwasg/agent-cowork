@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::contracts::events::DebugEvent;
+use agent_protocol::events::DebugEvent;
 
 struct SessionIndex {
     /// Ascending `(seq, byte_offset_of_line_start)`.
@@ -158,5 +158,57 @@ impl JsonlStore {
     pub fn delete_session(&self, session_id: &str) {
         let _ = fs::remove_file(self.path(session_id));
         self.index.lock().unwrap().remove(session_id);
+    }
+
+    /// Drop every persisted event with `seq > max_seq` (rewrites the file).
+    /// Used by session revert and checkpoint rewind.
+    pub fn truncate_after_seq(&self, session_id: &str, max_seq: i64) {
+        let kept: Vec<DebugEvent> = self
+            .read_session(session_id)
+            .into_iter()
+            .filter(|e| e.seq <= max_seq)
+            .collect();
+        self.rewrite_session(session_id, &kept);
+    }
+
+    /// Replace the whole session log with `events` (atomic-ish: write temp,
+    /// then rename) and rebuild the in-memory index.
+    pub fn rewrite_session(&self, session_id: &str, events: &[DebugEvent]) {
+        let path = self.path(session_id);
+        let tmp = self.dir.join(format!("{session_id}.jsonl.tmp"));
+        let mut offsets = Vec::with_capacity(events.len());
+        let mut next_offset = 0u64;
+        let write_result = (|| -> std::io::Result<()> {
+            let mut f = File::create(&tmp)?;
+            for ev in events {
+                let line = serde_json::to_string(ev)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+                let bytes = format!("{line}\n");
+                f.write_all(bytes.as_bytes())?;
+                offsets.push((ev.seq, next_offset));
+                next_offset += bytes.len() as u64;
+            }
+            f.flush()?;
+            Ok(())
+        })();
+        if let Err(e) = write_result {
+            tracing::warn!("jsonl: rewrite of {session_id} failed: {e}");
+            let _ = fs::remove_file(&tmp);
+            return;
+        }
+        // On Windows, rename over an existing file requires removing it first.
+        let _ = fs::remove_file(&path);
+        if let Err(e) = fs::rename(&tmp, &path) {
+            tracing::warn!("jsonl: rename for {session_id} failed: {e}");
+            let _ = fs::remove_file(&tmp);
+            return;
+        }
+        self.index.lock().unwrap().insert(
+            session_id.to_string(),
+            SessionIndex {
+                offsets,
+                next_offset,
+            },
+        );
     }
 }

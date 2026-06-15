@@ -12,9 +12,9 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
-use crate::contracts::{ApiError, ApiResult};
-use crate::infra::http::{no_redirect_client, shared_client};
-use crate::tools::{AgentTool, ToolContext};
+use crate::{AgentTool, ToolContext};
+use agent_protocol::{ApiError, ApiResult};
+use agent_store::http::{no_redirect_client, shared_client};
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 const FETCH_MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -27,13 +27,24 @@ impl AgentTool for WebSearch {
     fn name(&self) -> &str {
         "web_search"
     }
+    fn read_only(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
-        "Search the web via Tavily and return result titles, urls and snippets."
+        "联网搜索（Tavily），返回结果标题、URL 与摘要片段。用于查证训练数据之外或时效性强的信息：\
+         库的最新用法、报错含义、新闻动态等。需要细节时配合 web_fetch 读取结果原文；\
+         查询代码库内部的问题请用 grep，不要联网搜。"
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
-            "properties": { "query": {"type": "string"} },
+            "properties": {
+                "query": {"type": "string", "description": "搜索关键词；查技术资料时附上版本号/年份更准"},
+                "max_results": {
+                    "type": "integer",
+                    "description": "返回结果数（1-10，默认 5）"
+                }
+            },
             "required": ["query"]
         })
     }
@@ -47,21 +58,46 @@ impl AgentTool for WebSearch {
         if query.is_empty() {
             return Err(ApiError::new("TOOL_INVALID_ARGS", "query required"));
         }
-        let Some(key) = ctx.web.api_key.clone() else {
-            return Ok("(web_search unavailable: no TAVILY_API_KEY configured)".to_string());
+        if !ctx.search.effectively_enabled() {
+            return Ok(
+                "(web_search unavailable: 联网搜索已在设置中关闭，请在设置里开启并配置 Tavily API Key)"
+                    .to_string(),
+            );
+        }
+        let Some(key) = ctx.search.resolve_api_key() else {
+            return Ok(
+                "(web_search unavailable: 未配置 Tavily API Key，请在设置中配置或设置 TAVILY_API_KEY)"
+                    .to_string(),
+            );
         };
-        let resp = shared_client()
-            .post(format!("{}/search", ctx.web.base_url.trim_end_matches('/')))
-            .timeout(FETCH_TIMEOUT)
-            .json(&json!({ "api_key": key, "query": query, "max_results": 5 }))
-            .send()
-            .await
-            .map_err(|e| ApiError::new("WEB_SEARCH_ERROR", e.to_string()))?;
-        let body: Value = resp
-            .json()
-            .await
-            .map_err(|e| ApiError::new("WEB_SEARCH_ERROR", e.to_string()))?;
+        let max_results = args
+            .get("max_results")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(5)
+            .clamp(1, 10);
+
+        let cfg = ctx.search.get_stored();
+        let mut payload = json!({
+            "api_key": key,
+            "query": query,
+            "max_results": max_results,
+            "include_answer": true,
+            "topic": if cfg.topic.is_empty() { "general".to_string() } else { cfg.topic },
+            "search_depth": if cfg.search_depth.is_empty() { "basic".to_string() } else { cfg.search_depth },
+        });
+        if !cfg.time_range.is_empty() {
+            payload["time_range"] = json!(cfg.time_range);
+        }
+
+        let url = format!("{}/search", ctx.search.base_url.trim_end_matches('/'));
+        let body = tavily_post_with_retry(&url, &payload).await?;
+
         let mut out = String::new();
+        if let Some(answer) = body.get("answer").and_then(|v| v.as_str()) {
+            if !answer.trim().is_empty() {
+                out.push_str(&format!("Answer: {}\n\n", answer.trim()));
+            }
+        }
         if let Some(results) = body.get("results").and_then(|r| r.as_array()) {
             for r in results {
                 let title = r.get("title").and_then(|v| v.as_str()).unwrap_or("");
@@ -80,6 +116,51 @@ impl AgentTool for WebSearch {
     }
 }
 
+/// POST to Tavily with one retry on transport errors / 5xx responses.
+/// Non-5xx HTTP errors surface immediately with the status code in the message.
+async fn tavily_post_with_retry(url: &str, payload: &Value) -> ApiResult<Value> {
+    let mut last_err = String::new();
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let sent = shared_client()
+            .post(url)
+            .timeout(FETCH_TIMEOUT)
+            .json(payload)
+            .send()
+            .await;
+        match sent {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_server_error() {
+                    last_err = format!("Tavily HTTP {status}");
+                    continue;
+                }
+                if !status.is_success() {
+                    let detail = resp.text().await.unwrap_or_default();
+                    return Err(ApiError::new(
+                        "WEB_SEARCH_ERROR",
+                        format!(
+                            "Tavily HTTP {status}: {}",
+                            detail.chars().take(200).collect::<String>()
+                        ),
+                    ));
+                }
+                return resp
+                    .json::<Value>()
+                    .await
+                    .map_err(|e| ApiError::new("WEB_SEARCH_ERROR", format!("bad json: {e}")));
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                continue;
+            }
+        }
+    }
+    Err(ApiError::new("WEB_SEARCH_ERROR", last_err))
+}
+
 pub struct WebFetch;
 
 #[async_trait]
@@ -87,13 +168,18 @@ impl AgentTool for WebFetch {
     fn name(&self) -> &str {
         "web_fetch"
     }
+    fn read_only(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
-        "Fetch a URL and return its readable text content."
+        "抓取一个网页 URL 并返回去除标签后的正文文本，通常跟在 web_search 之后读取最有价值的结果原文。\
+         限制：只支持 http/https，30 秒超时，返回内容有长度上限，无法访问需要登录的页面，\
+         不支持二进制内容（PDF/图片等）。"
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
-            "properties": { "url": {"type": "string"} },
+            "properties": { "url": {"type": "string", "description": "完整的 http/https URL"} },
             "required": ["url"]
         })
     }
@@ -134,8 +220,7 @@ impl AgentTool for WebFetch {
             let mut buf: Vec<u8> = Vec::new();
             let mut stream = resp.bytes_stream();
             while let Some(chunk) = stream.next().await {
-                let chunk =
-                    chunk.map_err(|e| ApiError::new("WEB_FETCH_ERROR", e.to_string()))?;
+                let chunk = chunk.map_err(|e| ApiError::new("WEB_FETCH_ERROR", e.to_string()))?;
                 if buf.len() + chunk.len() > FETCH_MAX_BYTES {
                     buf.extend_from_slice(&chunk[..FETCH_MAX_BYTES - buf.len()]);
                     break;
@@ -268,10 +353,16 @@ mod tests {
             "fc00::1",
             "fe80::1",
         ] {
-            assert!(is_private_ip(&ip.parse().unwrap()), "{ip} should be private");
+            assert!(
+                is_private_ip(&ip.parse().unwrap()),
+                "{ip} should be private"
+            );
         }
         for ip in ["8.8.8.8", "1.1.1.1", "2606:4700::1111"] {
-            assert!(!is_private_ip(&ip.parse().unwrap()), "{ip} should be public");
+            assert!(
+                !is_private_ip(&ip.parse().unwrap()),
+                "{ip} should be public"
+            );
         }
     }
 

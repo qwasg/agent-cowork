@@ -4,18 +4,7 @@
 //! internal port. The Go edge gateway terminates client HTTP/WS/SSE, handles
 //! auth/CORS, and proxies to this service.
 
-// The rewrite intentionally exposes a complete, layered API surface; some
-// helpers are not yet wired into a caller. Allow dead_code crate-wide so CI
-// stays green without deleting deliberately-provided contract methods.
-#![allow(dead_code)]
-
 mod api;
-mod config;
-mod contracts;
-mod domain;
-mod infra;
-mod provider;
-mod tools;
 
 #[cfg(test)]
 mod tests;
@@ -32,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cfg = config::Config::load();
+    let cfg = agent_config::Config::load();
     // The Rust core listens on the configured port + 1 by default (the Go edge
     // gateway owns the public port 8002). Override with AGENT_CORE_PORT.
     let core_port: u16 = std::env::var("AGENT_CORE_PORT")

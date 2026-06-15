@@ -1,3 +1,8 @@
+---
+name: skill-creator
+description: 用于在当前项目的 agent 工作区中创建、修改、校验技能文件。当用户提到“创建 skill / 新增 skill / 修改 skill / 优化 skill / 更新 SKILL.md / 调整技能规则”时使用本技能。
+---
+
 # Skill Creator
 
 用于在当前项目的 agent 工作区中创建、修改、校验技能文件。  

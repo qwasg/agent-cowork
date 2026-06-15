@@ -64,6 +64,8 @@ impl ApiError {
             | "AUTH_USER_NOT_FOUND"
             | "SKILL_NOT_FOUND"
             | "TOOL_NOT_FOUND"
+            | "SHELL_NOT_FOUND"
+            | "MEMORY_NOT_FOUND"
             | "PERMISSION_REQUEST_NOT_FOUND" => 404,
             "INVALID_TITLE"
             | "INVALID_PATH"
@@ -76,7 +78,11 @@ impl ApiError {
             | "AUTH_INVALID_INPUT" => 400,
             "AUTH_BAD_CREDENTIALS" | "AUTH_MISSING" | "AUTH_INVALID" => 401,
             "TOOL_FORBIDDEN" => 403,
-            "PROPOSAL_APPLY_FAILED" | "FILESYSTEM_ERROR" | "GIT_ERROR" | "COMMAND_ERROR" => 500,
+            "PROPOSAL_APPLY_FAILED"
+            | "FILESYSTEM_ERROR"
+            | "GIT_ERROR"
+            | "COMMAND_ERROR"
+            | "STORE_ERROR" => 500,
             "NOT_A_GIT_REPO" | "AUTH_EMAIL_TAKEN" | "RUN_CANCELLED" => 409,
             "PROVIDER_HTTP_ERROR"
             | "PROVIDER_DECODE_ERROR"
@@ -106,6 +112,9 @@ impl ApiError {
     pub fn todo_not_found(id: &str) -> Self {
         ApiError::new("TODO_NOT_FOUND", format!("todo not found: {id}"))
     }
+    pub fn memory_not_found(id: &str) -> Self {
+        ApiError::new("MEMORY_NOT_FOUND", format!("memory not found: {id}"))
+    }
     pub fn path_not_found(p: &str) -> Self {
         ApiError::new("PATH_NOT_FOUND", format!("path not found: {p}"))
     }
@@ -120,5 +129,10 @@ impl ApiError {
     }
     pub fn filesystem(msg: impl Into<String>) -> Self {
         ApiError::new("FILESYSTEM_ERROR", msg)
+    }
+    /// A durable-store write failed on a path where the caller must know
+    /// (REST mutations). Background writes log + count instead.
+    pub fn store(msg: impl Into<String>) -> Self {
+        ApiError::new("STORE_ERROR", msg)
     }
 }

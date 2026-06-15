@@ -81,7 +81,12 @@ pub fn render_l1(ir: &DocIR, slide_index: Option<usize>) -> L1Preview {
                     match el.element_type {
                         moonlit_doccore::ElementType::Text => {
                             let text = el.props.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                            let size = el.props.get("fontSize").and_then(|v| v.as_f64()).unwrap_or(18.0) / 72.0;
+                            let size = el
+                                .props
+                                .get("fontSize")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(18.0)
+                                / 72.0;
                             svg.push_str(&format!(
                                 r##"<text x="{:.3}" y="{:.3}" font-size="{:.3}" fill="#111">{}</text>"##,
                                 el.geo.x,
@@ -91,7 +96,11 @@ pub fn render_l1(ir: &DocIR, slide_index: Option<usize>) -> L1Preview {
                             ));
                         }
                         moonlit_doccore::ElementType::Shape => {
-                            let fill = el.props.get("fill").and_then(|v| v.as_str()).unwrap_or("none");
+                            let fill = el
+                                .props
+                                .get("fill")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("none");
                             svg.push_str(&format!(
                                 r##"<rect x="{:.3}" y="{:.3}" width="{:.3}" height="{:.3}" fill="{}" stroke="#333"/>"##,
                                 el.geo.x, el.geo.y, el.geo.w, el.geo.h, esc(fill)
@@ -167,7 +176,11 @@ pub fn raster_preview(req: RasterRequest) -> Result<RasterResult> {
 fn tracing_svg_fallback(_err: &str) {}
 
 /// Rasterize the IR to a PNG byte buffer using resvg/usvg/tiny-skia.
-pub fn render_png(ir: &DocIR, slide_index: Option<usize>, width: Option<u32>) -> std::result::Result<Vec<u8>, String> {
+pub fn render_png(
+    ir: &DocIR,
+    slide_index: Option<usize>,
+    width: Option<u32>,
+) -> std::result::Result<Vec<u8>, String> {
     let (svg, w, h) = raster_svg(ir, slide_index, width);
 
     let mut options = usvg::Options::default();
@@ -177,8 +190,13 @@ pub fn render_png(ir: &DocIR, slide_index: Option<usize>, width: Option<u32>) ->
     let tree_size = tree.size();
     let sx = w as f32 / tree_size.width();
     let sy = h as f32 / tree_size.height();
-    let mut pixmap = tiny_skia::Pixmap::new(w, h).ok_or_else(|| "invalid pixmap size".to_string())?;
-    resvg::render(&tree, tiny_skia::Transform::from_scale(sx, sy), &mut pixmap.as_mut());
+    let mut pixmap =
+        tiny_skia::Pixmap::new(w, h).ok_or_else(|| "invalid pixmap size".to_string())?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::from_scale(sx, sy),
+        &mut pixmap.as_mut(),
+    );
     pixmap.encode_png().map_err(|e| e.to_string())
 }
 
@@ -216,7 +234,8 @@ fn raster_svg(ir: &DocIR, slide_index: Option<usize>, width: Option<u32>) -> (St
                     },
                     moonlit_doccore::WordBlockType::Paragraph => 16.0,
                 };
-                let weight = if matches!(block.block_type, moonlit_doccore::WordBlockType::Heading) {
+                let weight = if matches!(block.block_type, moonlit_doccore::WordBlockType::Heading)
+                {
                     "bold"
                 } else {
                     "normal"

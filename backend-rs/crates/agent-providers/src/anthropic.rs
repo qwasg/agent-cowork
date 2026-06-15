@@ -8,11 +8,11 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
-use crate::contracts::models::ToolCall;
-use crate::contracts::{ApiError, ApiResult};
-use crate::provider::openai::assemble;
-use crate::provider::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent, Usage};
-use crate::provider::LLMProvider;
+use crate::openai::assemble;
+use crate::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent, Usage};
+use crate::LLMProvider;
+use agent_protocol::models::ToolCall;
+use agent_protocol::{ApiError, ApiResult};
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
@@ -92,7 +92,11 @@ impl AnthropicProvider {
                     messages.push(json!({ "role": "assistant", "content": blocks }));
                 }
                 role => {
-                    let role = if role == "assistant" { "assistant" } else { "user" };
+                    let role = if role == "assistant" {
+                        "assistant"
+                    } else {
+                        "user"
+                    };
                     messages.push(json!({ "role": role, "content": m.content }));
                 }
             }
@@ -104,7 +108,13 @@ impl AnthropicProvider {
             "stream": req.stream,
         });
         if !system.is_empty() {
-            body["system"] = json!(system);
+            // Block form with cache_control: the (prefix-stable) system
+            // prompt becomes a prompt-cache anchor across turns.
+            body["system"] = json!([{
+                "type": "text",
+                "text": system,
+                "cache_control": { "type": "ephemeral" },
+            }]);
         }
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
@@ -245,9 +255,11 @@ impl AnthropicProvider {
                                     if let Some(pj) =
                                         delta.get("partial_json").and_then(|p| p.as_str())
                                     {
-                                        let entry = tool_acc
-                                            .entry(idx)
-                                            .or_insert((None, None, String::new()));
+                                        let entry = tool_acc.entry(idx).or_insert((
+                                            None,
+                                            None,
+                                            String::new(),
+                                        ));
                                         entry.2.push_str(pj);
                                         sink(StreamEvent::ToolCall {
                                             index: idx,
@@ -279,10 +291,12 @@ impl AnthropicProvider {
                     }
                     "message_start" => {
                         if let Some(u) = v.get("message").and_then(|m| m.get("usage")) {
-                            usage.prompt_tokens = u
-                                .get("input_tokens")
-                                .and_then(|n| n.as_u64())
-                                .unwrap_or(0) as u32;
+                            usage.prompt_tokens =
+                                u.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0) as u32;
+                            usage.cache_read_tokens =
+                                u.get("cache_read_input_tokens")
+                                    .and_then(|n| n.as_u64())
+                                    .unwrap_or(0) as u32;
                         }
                     }
                     "message_stop" => {
@@ -389,6 +403,10 @@ fn parse_full_response(v: &Value, provider: &str, model: &str) -> ProviderRespon
             prompt_tokens: prompt,
             completion_tokens: completion,
             total_tokens: prompt + completion,
+            cache_read_tokens: usage
+                .and_then(|u| u.get("cache_read_input_tokens"))
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0) as u32,
         },
         provider: provider.to_string(),
         model: model.to_string(),

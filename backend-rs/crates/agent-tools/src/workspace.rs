@@ -7,8 +7,8 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::contracts::{ApiError, ApiResult};
-use crate::tools::{resolve_in_root, AgentTool, ToolContext};
+use crate::{resolve_in_root, AgentTool, ToolContext};
+use agent_protocol::{ApiError, ApiResult};
 
 fn arg_str(args: &Value, key: &str) -> String {
     args.get(key)
@@ -24,13 +24,17 @@ impl AgentTool for ReadFile {
     fn name(&self) -> &str {
         "read_file"
     }
+    fn read_only(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
-        "Read a UTF-8 text file from the workspace. Returns its content."
+        "读取工作区内一个 UTF-8 文本文件的完整内容。修改任何文件之前必须先用它读过该文件。\
+         超长文件只返回前约 4 万字符（超出部分被截断）。读取文件一律用本工具，不要用 run_command。"
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
-            "properties": { "path": {"type": "string", "description": "workspace-relative path"} },
+            "properties": { "path": {"type": "string", "description": "相对工作区根目录的文件路径"} },
             "required": ["path"]
         })
     }
@@ -54,13 +58,17 @@ impl AgentTool for ListDir {
     fn name(&self) -> &str {
         "list_dir"
     }
+    fn read_only(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
-        "List entries of a workspace directory."
+        "列出工作区某个目录的直接子项（每行一个名字，目录以 / 结尾），用于把握项目结构。\
+         只列一层，不递归；要按内容找文件请用 grep。"
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
-            "properties": { "path": {"type": "string", "description": "workspace-relative dir (default root)"} }
+            "properties": { "path": {"type": "string", "description": "相对工作区根目录的目录路径，留空表示根目录"} }
         })
     }
     async fn run(&self, args: Value, ctx: &ToolContext) -> ApiResult<String> {
@@ -91,15 +99,20 @@ impl AgentTool for Grep {
     fn name(&self) -> &str {
         "grep"
     }
+    fn read_only(&self) -> bool {
+        true
+    }
     fn description(&self) -> &str {
-        "Search file contents in the workspace with a regex (ripgrep-style)."
+        "在工作区文件内容中按正则表达式搜索（逐行匹配，遵循 .gitignore），是定位代码的首选工具：\
+         按符号名、报错文本、配置键等检索。返回每行命中，格式为 `路径:行号:行内容`，最多 200 条；\
+         无命中返回 (no matches)。提示：结果过多就缩小 path 或写更精确的 pattern。"
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "regular expression"},
-                "path": {"type": "string", "description": "subdir to limit search (optional)"}
+                "pattern": {"type": "string", "description": "正则表达式（Rust regex 语法，区分大小写）"},
+                "path": {"type": "string", "description": "限定搜索的子目录（可选，默认整个工作区）"}
             },
             "required": ["pattern"]
         })
@@ -175,14 +188,16 @@ impl AgentTool for WriteFile {
         "write_file"
     }
     fn description(&self) -> &str {
-        "Create or overwrite a workspace file with the given content."
+        "创建或整体覆盖一个工作区文件（父目录会自动创建）。注意：内容是全量替换——\
+         修改已有文件时必须先 read_file 拿到原文，在原文基础上改出完整新内容再写入，\
+         否则未包含的部分会丢失。大段中日韩文本（约超过 1 万字符）请拆成多次写入。"
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string"},
-                "content": {"type": "string"}
+                "path": {"type": "string", "description": "相对工作区根目录的文件路径"},
+                "content": {"type": "string", "description": "文件的完整新内容（全量替换）"}
             },
             "required": ["path", "content"]
         })
@@ -211,14 +226,15 @@ impl AgentTool for CreateDocument {
         "create_document"
     }
     fn description(&self) -> &str {
-        "Create a new document file (fails if it already exists)."
+        "新建一个文件（目标已存在时报错，绝不覆盖）。确定是“新增文件”时优先用它而不是 write_file，\
+         以免误覆盖既有内容。"
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
             "properties": {
-                "path": {"type": "string"},
-                "content": {"type": "string"}
+                "path": {"type": "string", "description": "相对工作区根目录的新文件路径"},
+                "content": {"type": "string", "description": "文件初始内容（可省略，默认空文件）"}
             },
             "required": ["path"]
         })
@@ -253,12 +269,13 @@ impl AgentTool for DeleteFile {
         "delete_file"
     }
     fn description(&self) -> &str {
-        "Delete a workspace file."
+        "删除工作区内的一个文件（不可恢复，不支持删除目录）。仅在任务明确需要时使用，\
+         删除前确认没有其它代码引用该文件。"
     }
     fn parameters(&self) -> Value {
         json!({
             "type": "object",
-            "properties": { "path": {"type": "string"} },
+            "properties": { "path": {"type": "string", "description": "相对工作区根目录的文件路径"} },
             "required": ["path"]
         })
     }

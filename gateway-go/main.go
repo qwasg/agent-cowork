@@ -62,8 +62,9 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) authorized(r *http.Request) bool {
+	// Exact match: prefix matching would also open e.g. /auth/login-anything.
 	for _, p := range openPaths {
-		if strings.HasPrefix(r.URL.Path, p) {
+		if r.URL.Path == p {
 			return true
 		}
 	}

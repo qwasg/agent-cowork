@@ -16,23 +16,24 @@ use std::time::{Duration, Instant};
 
 use tokio_util::sync::CancellationToken;
 
-use crate::config::Config;
-use crate::contracts::ApiError;
-use crate::contracts::ApiResult;
-use crate::infra::{CryptoStore, Store};
-use crate::provider::anthropic::AnthropicProvider;
-use crate::provider::channels::{self, Channel, Protocol};
-use crate::provider::google::GoogleProvider;
-use crate::provider::mock::MockProvider;
-use crate::provider::openai::OpenAiCompatProvider;
-use crate::provider::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent};
-use crate::provider::LLMProvider;
+use crate::anthropic::AnthropicProvider;
+use crate::channels::{self, Channel, Protocol};
+use crate::google::GoogleProvider;
+use crate::mock::MockProvider;
+use crate::openai::OpenAiCompatProvider;
+use crate::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent};
+use crate::LLMProvider;
+use agent_config::Config;
+use agent_protocol::ApiError;
+use agent_protocol::ApiResult;
+use agent_store::{CryptoStore, Store};
 
 struct BreakerState {
     consecutive_failures: u32,
     open_until: Option<Instant>,
 }
 
+#[derive(Clone)]
 struct ChainEntry {
     provider: Arc<dyn LLMProvider>,
     /// Model to use when the request's model id doesn't apply to this provider
@@ -41,7 +42,7 @@ struct ChainEntry {
 }
 
 pub struct ProviderExecutionService {
-    chain: Vec<ChainEntry>,
+    chain: Mutex<Vec<ChainEntry>>,
     breakers: Mutex<HashMap<String, BreakerState>>,
     max_retries: u32,
     failure_threshold: u32,
@@ -49,11 +50,24 @@ pub struct ProviderExecutionService {
 
 impl ProviderExecutionService {
     pub fn build(cfg: &Config, store: &Store, crypto: &Arc<CryptoStore>) -> Arc<Self> {
+        Arc::new(ProviderExecutionService {
+            chain: Mutex::new(Self::build_chain(cfg, store, crypto)),
+            breakers: Mutex::new(HashMap::new()),
+            max_retries: 2,
+            failure_threshold: 3,
+        })
+    }
+
+    pub fn reload(&self, cfg: &Config, store: &Store, crypto: &Arc<CryptoStore>) {
+        *self.chain.lock().unwrap() = Self::build_chain(cfg, store, crypto);
+    }
+
+    fn build_chain(cfg: &Config, store: &Store, crypto: &Arc<CryptoStore>) -> Vec<ChainEntry> {
         let mut chain: Vec<ChainEntry> = Vec::new();
         let timeout = cfg.provider_timeout_secs;
 
         // 1) Configured channels from the durable store (highest priority).
-        if let Ok(list) = store.list::<Channel>(crate::infra::store::T_CHANNELS) {
+        if let Ok(list) = store.list::<Channel>(agent_store::store::T_CHANNELS) {
             for ch in list.into_iter().filter(|c| c.enabled && c.has_key()) {
                 let info = channels::provider_type(&ch.provider_type);
                 let base = if !ch.base_url.is_empty() {
@@ -67,10 +81,7 @@ impl ProviderExecutionService {
                 }
                 let key = crypto.decrypt(&ch.api_key_enc);
                 if key.is_empty() {
-                    tracing::warn!(
-                        "channel {} has an undecryptable API key; skipping",
-                        ch.id
-                    );
+                    tracing::warn!("channel {} has an undecryptable API key; skipping", ch.id);
                     continue;
                 }
                 let name = format!("channel:{}", ch.id);
@@ -84,7 +95,10 @@ impl ProviderExecutionService {
                     }
                     // OpenAI protocol and unknown provider types use the
                     // OpenAI-compatible adapter.
-                    _ => Arc::new(OpenAiCompatProvider::new(name, base, key, timeout)),
+                    _ => Arc::new(
+                        OpenAiCompatProvider::new(name, base, key, timeout)
+                            .with_provider_type(ch.provider_type.clone()),
+                    ),
                 };
                 chain.push(ChainEntry {
                     provider,
@@ -123,32 +137,38 @@ impl ProviderExecutionService {
             default_model: None,
         });
 
-        Arc::new(ProviderExecutionService {
-            chain,
-            breakers: Mutex::new(HashMap::new()),
-            max_retries: 2,
-            failure_threshold: 3,
-        })
+        chain
     }
 
     #[cfg(test)]
     pub fn for_test(providers: Vec<Arc<dyn LLMProvider>>) -> Arc<Self> {
-        Arc::new(ProviderExecutionService {
-            chain: providers
-                .into_iter()
-                .map(|provider| ChainEntry {
-                    provider,
-                    default_model: None,
-                })
-                .collect(),
+        let svc = Arc::new(ProviderExecutionService {
+            chain: Mutex::new(Vec::new()),
             breakers: Mutex::new(HashMap::new()),
             max_retries: 1,
             failure_threshold: 3,
-        })
+        });
+        svc.override_chain(providers);
+        svc
+    }
+
+    /// Replace the whole provider chain with the given providers (no default
+    /// models). Test hook used by the engine integration tests to drive the
+    /// tool loop with scripted responses.
+    pub fn override_chain(&self, providers: Vec<Arc<dyn LLMProvider>>) {
+        *self.chain.lock().unwrap() = providers
+            .into_iter()
+            .map(|provider| ChainEntry {
+                provider,
+                default_model: None,
+            })
+            .collect();
     }
 
     pub fn provider_names(&self) -> Vec<String> {
         self.chain
+            .lock()
+            .unwrap()
             .iter()
             .map(|e| e.provider.name().to_string())
             .collect()
@@ -156,6 +176,8 @@ impl ProviderExecutionService {
 
     pub fn has_real_provider(&self) -> bool {
         self.chain
+            .lock()
+            .unwrap()
             .iter()
             .any(|e| e.provider.name() != "mock" && e.provider.is_ready())
     }
@@ -206,19 +228,20 @@ impl ProviderExecutionService {
         cancel: Option<&CancellationToken>,
     ) -> ApiResult<ProviderResponse> {
         let target = parse_channel_target(&req.model);
+        let chain = self.chain.lock().unwrap().clone();
         // Targeted channel (if any) goes first; rest keep chain order.
-        let mut ordered: Vec<&ChainEntry> = Vec::with_capacity(self.chain.len());
+        let mut ordered: Vec<ChainEntry> = Vec::with_capacity(chain.len());
         if let Some((pname, _)) = &target {
-            if let Some(entry) = self.chain.iter().find(|e| e.provider.name() == pname) {
-                ordered.push(entry);
+            if let Some(entry) = chain.iter().find(|e| e.provider.name() == pname) {
+                ordered.push(entry.clone());
             }
         }
-        for entry in &self.chain {
+        for entry in &chain {
             if !ordered
                 .iter()
                 .any(|e| e.provider.name() == entry.provider.name())
             {
-                ordered.push(entry);
+                ordered.push(entry.clone());
             }
         }
 
@@ -233,7 +256,7 @@ impl ProviderExecutionService {
         };
 
         let mut last_err: Option<ApiError> = None;
-        for entry in ordered {
+        for entry in &ordered {
             let name = entry.provider.name().to_string();
             if !entry.provider.is_ready() || self.breaker_open(&name) {
                 continue;
@@ -336,7 +359,7 @@ fn effective_model(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::types::noop_sink;
+    use crate::types::noop_sink;
     use async_trait::async_trait;
 
     #[test]
@@ -368,7 +391,7 @@ mod tests {
     fn req() -> ProviderRequest {
         ProviderRequest {
             model: "default".to_string(),
-            messages: vec![crate::contracts::models::ChatMessage::user("hi")],
+            messages: vec![agent_protocol::models::ChatMessage::user("hi")],
             tools: vec![],
             temperature: None,
             stream: false,

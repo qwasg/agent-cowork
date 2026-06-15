@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::contracts::models::{new_id, now_ts, TodoItem};
-use crate::contracts::{ApiError, ApiResult};
-use crate::infra::store::{IDX_TODOS_BY_SESSION, T_TODOS};
-use crate::infra::Store;
+use agent_protocol::models::{new_id, now_ts, TodoItem};
+use agent_protocol::{ApiError, ApiResult};
+use agent_store::store::{IDX_TODOS_BY_SESSION, T_TODOS};
+use agent_store::Store;
 
 pub struct TodoEngine {
     store: Arc<Store>,

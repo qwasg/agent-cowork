@@ -35,7 +35,7 @@ pub fn run() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |window, cx| cx.new(|cx| DocForgeApp::new(window, cx)),
+            |_window, cx| cx.new(DocForgeApp::new),
         )
         .unwrap();
         cx.activate(true);
@@ -60,10 +60,37 @@ pub struct DocForgeApp {
     composer: Entity<TextInput>,
     status: SharedString,
     drag_last: Option<Point<Pixels>>,
+    /// When opened from the Agent IDE workspace tree, lock mode and show filename.
+    workspace_binding: Option<WorkspaceBinding>,
+    /// Set on any user-initiated edit; cleared on load/save. Used by the host
+    /// IDE to render a dirty indicator and prompt to save.
+    dirty: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceBinding {
+    pub path: String,
+    pub mode: DocForgeMode,
+    /// Opened from Agent IDE workspace: read-only document view, no chrome.
+    pub preview_only: bool,
 }
 
 impl DocForgeApp {
-    fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// Construct the collaborative DocForge view (built-in workbench tab and the
+    /// standalone window root). Connects both documents to the shared sync rooms
+    /// so browser Yjs peers collaborate in real time.
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        Self::build(cx, true)
+    }
+
+    /// Construct an isolated DocForge view for a single workspace file. Does NOT
+    /// connect to the shared sync rooms, so multiple open documents never share
+    /// or clobber each other's CRDT state. Persistence is via REST save instead.
+    pub fn new_standalone(cx: &mut Context<Self>) -> Self {
+        Self::build(cx, false)
+    }
+
+    fn build(cx: &mut Context<Self>, connect_sync: bool) -> Self {
         let state = DocForgeState::default();
         let composer = cx.new(|cx| TextInput::new(cx, "", "在此输入文本，然后点击插入/替换…"));
 
@@ -87,27 +114,38 @@ impl DocForgeApp {
         .detach();
 
         // Connect each document to the embedded sync server so browser Yjs peers
-        // sharing the room collaborate in real time.
-        if let Some(handle) = RUNTIME.get() {
-            let connections = [
-                ("ws://127.0.0.1:1234/docforge-word", state.word.core.doc().clone(), tx.clone()),
-                ("ws://127.0.0.1:1234/docforge-ppt", state.ppt.core.doc().clone(), tx.clone()),
-            ];
-            for (url, doc, repaint) in connections {
-                let handle = handle.clone();
-                handle.spawn(async move {
-                    match SyncClient::connect(url.to_string(), doc, move || {
-                        let _ = repaint.unbounded_send(());
-                    })
-                    .await
-                    {
-                        Ok(client) => {
-                            // Keep the connection alive for the process lifetime.
-                            std::mem::forget(client);
+        // sharing the room collaborate in real time. Skipped for per-file
+        // standalone editors to keep documents isolated.
+        if connect_sync {
+            if let Some(handle) = RUNTIME.get() {
+                let connections = [
+                    (
+                        "ws://127.0.0.1:1234/docforge-word",
+                        state.word.core.doc().clone(),
+                        tx.clone(),
+                    ),
+                    (
+                        "ws://127.0.0.1:1234/docforge-ppt",
+                        state.ppt.core.doc().clone(),
+                        tx.clone(),
+                    ),
+                ];
+                for (url, doc, repaint) in connections {
+                    let handle = handle.clone();
+                    handle.spawn(async move {
+                        match SyncClient::connect(url.to_string(), doc, move || {
+                            let _ = repaint.unbounded_send(());
+                        })
+                        .await
+                        {
+                            Ok(client) => {
+                                // Keep the connection alive for the process lifetime.
+                                std::mem::forget(client);
+                            }
+                            Err(err) => tracing::warn!("sync connect {url} failed: {err}"),
                         }
-                        Err(err) => tracing::warn!("sync connect {url} failed: {err}"),
-                    }
-                });
+                    });
+                }
             }
         }
 
@@ -118,7 +156,88 @@ impl DocForgeApp {
             composer,
             status: "就绪".into(),
             drag_last: None,
+            workspace_binding: None,
+            dirty: false,
         }
+    }
+
+    /// Whether there are unsaved edits since the last load/save.
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Clear the dirty flag (call after a successful save).
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
+    }
+
+    fn mark_dirty(&mut self) {
+        if self
+            .workspace_binding
+            .as_ref()
+            .is_some_and(|b| b.preview_only)
+        {
+            return;
+        }
+        self.dirty = true;
+    }
+
+    /// Load IR from a workspace file: preview-only view (no editor chrome).
+    pub fn load_workspace_ir(&mut self, path: String, ir: DocIR, cx: &mut Context<Self>) {
+        let mode = match &ir {
+            DocIR::Word { .. } => DocForgeMode::Word,
+            DocIR::Ppt { .. } => DocForgeMode::Ppt,
+        };
+        self.workspace_binding = Some(WorkspaceBinding {
+            path: path.clone(),
+            mode,
+            preview_only: true,
+        });
+        self.apply_ir(ir, cx);
+        self.dirty = false;
+        self.set_status(format!("已打开 {path}"));
+    }
+
+    pub fn read_ir(&self) -> DocIR {
+        match self.state.mode {
+            DocForgeMode::Word => self.state.word.core.read_document(),
+            DocForgeMode::Ppt => self.state.ppt.core.read_document(),
+        }
+    }
+
+    pub fn workspace_path(&self) -> Option<&str> {
+        self.workspace_binding.as_ref().map(|b| b.path.as_str())
+    }
+
+    fn apply_ir(&mut self, ir: DocIR, cx: &mut Context<Self>) {
+        let tmp = moonlit_doccore::DocCore::from_ir(
+            ir,
+            std::sync::Arc::new(moonlit_core::DefaultIdFactory::new()),
+            None,
+        );
+        let update = tmp.encode_state_as_update();
+        let doc_type = tmp.doc_type();
+        let result = match doc_type {
+            moonlit_doccore::DocType::Word => {
+                self.state.mode = DocForgeMode::Word;
+                self.state.word.core.apply_update(&update)
+            }
+            moonlit_doccore::DocType::Ppt => {
+                self.state.mode = DocForgeMode::Ppt;
+                if let DocIR::Ppt { slides } = tmp.read_document() {
+                    self.state.ppt.selected_slide_id = slides.first().map(|s| s.id.clone());
+                    self.state.ppt.selected_element_id = slides
+                        .first()
+                        .and_then(|s| s.elements.first())
+                        .map(|e| e.id.clone());
+                }
+                self.state.ppt.core.apply_update(&update)
+            }
+        };
+        if let Err(err) = result {
+            self.set_status(format!("加载失败: {err}"));
+        }
+        cx.notify();
     }
 
     fn composer_text(&self, cx: &App) -> String {
@@ -142,6 +261,7 @@ impl DocForgeApp {
             self.set_status(format!("插入失败: {err}"));
         } else {
             self.clear_composer(cx);
+            self.mark_dirty();
             self.set_status("已插入段落");
         }
         cx.notify();
@@ -150,10 +270,15 @@ impl DocForgeApp {
     fn add_heading(&mut self, level: u8, cx: &mut Context<Self>) {
         let text = self.composer_text(cx);
         let after = self.state.word.selected_block_id.clone();
-        if let Err(err) = self.state.word.insert_heading(after.as_deref(), level, &text) {
+        if let Err(err) = self
+            .state
+            .word
+            .insert_heading(after.as_deref(), level, &text)
+        {
             self.set_status(format!("插入失败: {err}"));
         } else {
             self.clear_composer(cx);
+            self.mark_dirty();
             self.set_status(format!("已插入 H{level}"));
         }
         cx.notify();
@@ -164,6 +289,7 @@ impl DocForgeApp {
         if let Err(err) = self.state.word.replace_selected_text(&text) {
             self.set_status(format!("替换失败: {err}"));
         } else {
+            self.mark_dirty();
             self.set_status("已替换文本");
         }
         cx.notify();
@@ -171,14 +297,31 @@ impl DocForgeApp {
 
     fn apply_mark(&mut self, mark: WordMark, cx: &mut Context<Self>) {
         let style = match mark {
-            WordMark::Bold => StyleInput { bold: Some(true), ..Default::default() },
-            WordMark::Italic => StyleInput { italic: Some(true), ..Default::default() },
-            WordMark::Underline => StyleInput { underline: Some(true), ..Default::default() },
-            WordMark::Strike => StyleInput { strike: Some(true), ..Default::default() },
-            WordMark::Code => StyleInput { code: Some(true), ..Default::default() },
+            WordMark::Bold => StyleInput {
+                bold: Some(true),
+                ..Default::default()
+            },
+            WordMark::Italic => StyleInput {
+                italic: Some(true),
+                ..Default::default()
+            },
+            WordMark::Underline => StyleInput {
+                underline: Some(true),
+                ..Default::default()
+            },
+            WordMark::Strike => StyleInput {
+                strike: Some(true),
+                ..Default::default()
+            },
+            WordMark::Code => StyleInput {
+                code: Some(true),
+                ..Default::default()
+            },
         };
         if let Err(err) = self.state.word.apply_toolbar_style(style) {
             self.set_status(format!("样式失败: {err}"));
+        } else {
+            self.mark_dirty();
         }
         cx.notify();
     }
@@ -198,6 +341,7 @@ impl DocForgeApp {
         if let Err(err) = self.state.ppt.add_slide(index, layout) {
             self.set_status(format!("添加幻灯片失败: {err}"));
         } else {
+            self.mark_dirty();
             self.set_status(format!("已添加 {layout} 幻灯片"));
         }
         cx.notify();
@@ -216,7 +360,13 @@ impl DocForgeApp {
         cx.notify();
     }
 
-    fn select_element(&mut self, slide_id: String, el_id: String, pos: Point<Pixels>, cx: &mut Context<Self>) {
+    fn select_element(
+        &mut self,
+        slide_id: String,
+        el_id: String,
+        pos: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
         self.state.ppt.select(slide_id, Some(el_id));
         self.drag_last = Some(pos);
         // Mirror element text into the composer for inline editing.
@@ -251,12 +401,18 @@ impl DocForgeApp {
         if let Err(err) = self.state.ppt.edit_selected_text(&text) {
             self.set_status(format!("编辑元素失败: {err}"));
         } else {
+            self.mark_dirty();
             self.set_status("已更新元素文本");
         }
         cx.notify();
     }
 
-    fn on_canvas_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_canvas_move(
+        &mut self,
+        ev: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(last) = self.drag_last else { return };
         let dx_px: f32 = (ev.position.x - last.x).into();
         let dy_px: f32 = (ev.position.y - last.y).into();
@@ -267,6 +423,7 @@ impl DocForgeApp {
         }
         if self.state.ppt.move_selected(dx, dy).is_ok() {
             self.drag_last = Some(ev.position);
+            self.mark_dirty();
             cx.notify();
         }
     }
@@ -290,7 +447,9 @@ impl DocForgeApp {
                 "presentation.pptx",
             ),
         };
-        let picked = rfd::FileDialog::new().set_file_name(default_name).save_file();
+        let picked = rfd::FileDialog::new()
+            .set_file_name(default_name)
+            .save_file();
         let Some(path) = picked else {
             self.set_status("已取消导出");
             cx.notify();
@@ -299,7 +458,11 @@ impl DocForgeApp {
         match crate::ExportService::export(&ir, format, &path) {
             Ok(res) => {
                 let _ = open::that(&res.path);
-                self.set_status(format!("已导出 {} ({} 字节)", res.path.display(), res.bytes));
+                self.set_status(format!(
+                    "已导出 {} ({} 字节)",
+                    res.path.display(),
+                    res.bytes
+                ));
             }
             Err(err) => self.set_status(format!("导出失败: {err}")),
         }
@@ -315,7 +478,11 @@ impl DocForgeApp {
         match crate::ExportService::preview_raster(ir, dir) {
             Ok(res) => {
                 let _ = open::that(&res.artifact_path);
-                self.set_status(format!("L2 渲染({}): {}", res.renderer, res.artifact_path.display()));
+                self.set_status(format!(
+                    "L2 渲染({}): {}",
+                    res.renderer,
+                    res.artifact_path.display()
+                ));
             }
             Err(err) => self.set_status(format!("渲染失败: {err}")),
         }
@@ -362,26 +529,9 @@ impl DocForgeApp {
                 return;
             }
         };
-        let tmp = moonlit_doccore::DocCore::from_ir(
-            ir.clone(),
-            std::sync::Arc::new(moonlit_core::DefaultIdFactory::new()),
-            None,
-        );
-        let update = tmp.encode_state_as_update();
-        let result = match &ir {
-            DocIR::Word { .. } => {
-                self.state.mode = DocForgeMode::Word;
-                self.state.word.core.apply_update(&update)
-            }
-            DocIR::Ppt { .. } => {
-                self.state.mode = DocForgeMode::Ppt;
-                self.state.ppt.core.apply_update(&update)
-            }
-        };
-        match result {
-            Ok(()) => self.set_status(format!("已打开 {}", path.display())),
-            Err(err) => self.set_status(format!("打开失败: {err}")),
-        }
+        self.workspace_binding = None;
+        self.apply_ir(ir, cx);
+        self.set_status(format!("已打开 {}", path.display()));
         cx.notify();
     }
 
@@ -405,7 +555,11 @@ fn button(
     cx: &mut Context<DocForgeApp>,
 ) -> impl IntoElement {
     let c = theme.colors();
-    let (bg, fg) = if active { (c.accent, rgb(0xffffff)) } else { (c.panel, c.text) };
+    let (bg, fg) = if active {
+        (c.accent, rgb(0xffffff))
+    } else {
+        (c.panel, c.text)
+    };
     div()
         .px_3()
         .py_1()
@@ -425,27 +579,39 @@ fn button(
 
 impl Render for DocForgeApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let c = self.theme.colors();
-        div()
-            .track_focus(&self.focus_handle(cx))
-            .flex()
-            .flex_col()
-            .size_full()
-            .bg(c.background)
-            .text_color(c.text)
-            .font_family("Segoe UI")
-            .text_size(px(14.0))
-            .child(self.render_topbar(cx))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.render_main(cx)),
-            )
-            .child(self.render_composer(cx))
-            .child(self.render_statusbar())
+        if self
+            .workspace_binding
+            .as_ref()
+            .is_some_and(|b| b.preview_only)
+        {
+            div()
+                .track_focus(&self.focus_handle(cx))
+                .size_full()
+                .bg(rgb(0xf3f4f6))
+                .child(self.render_preview_only(cx))
+        } else {
+            let c = self.theme.colors();
+            div()
+                .track_focus(&self.focus_handle(cx))
+                .flex()
+                .flex_col()
+                .size_full()
+                .bg(c.background)
+                .text_color(c.text)
+                .font_family("Segoe UI")
+                .text_size(px(14.0))
+                .child(self.render_topbar(cx))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_1()
+                        .min_h_0()
+                        .child(self.render_main(cx)),
+                )
+                .child(self.render_composer(cx))
+                .child(self.render_statusbar())
+        }
     }
 }
 
@@ -453,7 +619,20 @@ impl DocForgeApp {
     fn render_topbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let c = self.theme.colors();
         let mode = self.state.mode;
-        div()
+        let embedded = self.workspace_binding.is_some();
+        let title: SharedString = self
+            .workspace_binding
+            .as_ref()
+            .map(|b| {
+                std::path::Path::new(&b.path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("DocForge")
+                    .to_string()
+            })
+            .unwrap_or_else(|| "DocForge".to_string())
+            .into();
+        let mut bar = div()
             .flex()
             .flex_row()
             .items_center()
@@ -463,15 +642,62 @@ impl DocForgeApp {
             .bg(c.panel)
             .border_b_1()
             .border_color(rgba(0xffffff20))
-            .child(div().font_weight(gpui::FontWeight::BOLD).text_size(px(16.0)).child("DocForge"))
-            .child(div().w(px(16.0)))
-            .child(button("Word", mode == DocForgeMode::Word, &self.theme, |this, _w, cx| this.switch_mode(DocForgeMode::Word, cx), cx))
-            .child(button("PPT", mode == DocForgeMode::Ppt, &self.theme, |this, _w, cx| this.switch_mode(DocForgeMode::Ppt, cx), cx))
-            .child(div().flex_1())
-            .child(button("打开", false, &self.theme, |this, _w, cx| this.open(cx), cx))
-            .child(button("保存", false, &self.theme, |this, _w, cx| this.save(cx), cx))
-            .child(button("导出 PNG", false, &self.theme, |this, _w, cx| this.export_png(cx), cx))
-            .child(button("导出", false, &self.theme, |this, _w, cx| this.export(cx), cx))
+            .child(
+                div()
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_size(px(16.0))
+                    .child(title),
+            );
+        if !embedded {
+            bar = bar
+                .child(div().w(px(16.0)))
+                .child(button(
+                    "Word",
+                    mode == DocForgeMode::Word,
+                    &self.theme,
+                    |this, _w, cx| this.switch_mode(DocForgeMode::Word, cx),
+                    cx,
+                ))
+                .child(button(
+                    "PPT",
+                    mode == DocForgeMode::Ppt,
+                    &self.theme,
+                    |this, _w, cx| this.switch_mode(DocForgeMode::Ppt, cx),
+                    cx,
+                ))
+                .child(div().flex_1())
+                .child(button(
+                    "打开",
+                    false,
+                    &self.theme,
+                    |this, _w, cx| this.open(cx),
+                    cx,
+                ))
+                .child(button(
+                    "保存",
+                    false,
+                    &self.theme,
+                    |this, _w, cx| this.save(cx),
+                    cx,
+                ))
+                .child(button(
+                    "导出 PNG",
+                    false,
+                    &self.theme,
+                    |this, _w, cx| this.export_png(cx),
+                    cx,
+                ))
+                .child(button(
+                    "导出",
+                    false,
+                    &self.theme,
+                    |this, _w, cx| this.export(cx),
+                    cx,
+                ));
+        } else {
+            bar = bar.child(div().flex_1());
+        }
+        bar
     }
 
     fn render_main(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -541,7 +767,11 @@ impl DocForgeApp {
                                     .rounded_md()
                                     .text_size(px(size))
                                     .cursor_pointer()
-                                    .child(if text.is_empty() { "(空)".to_string() } else { text });
+                                    .child(if text.is_empty() {
+                                        "(空)".to_string()
+                                    } else {
+                                        text
+                                    });
                                 if bold || matches!(b.block_type, WordBlockType::Heading) {
                                     el = el.font_weight(gpui::FontWeight::BOLD);
                                 }
@@ -626,18 +856,78 @@ impl DocForgeApp {
             .bg(c.panel)
             .border_b_1()
             .border_color(rgba(0xffffff20))
-            .child(button("¶ 段落", false, &self.theme, |this, _w, cx| this.add_paragraph(cx), cx))
-            .child(button("H1", false, &self.theme, |this, _w, cx| this.add_heading(1, cx), cx))
-            .child(button("H2", false, &self.theme, |this, _w, cx| this.add_heading(2, cx), cx))
-            .child(button("H3", false, &self.theme, |this, _w, cx| this.add_heading(3, cx), cx))
+            .child(button(
+                "¶ 段落",
+                false,
+                &self.theme,
+                |this, _w, cx| this.add_paragraph(cx),
+                cx,
+            ))
+            .child(button(
+                "H1",
+                false,
+                &self.theme,
+                |this, _w, cx| this.add_heading(1, cx),
+                cx,
+            ))
+            .child(button(
+                "H2",
+                false,
+                &self.theme,
+                |this, _w, cx| this.add_heading(2, cx),
+                cx,
+            ))
+            .child(button(
+                "H3",
+                false,
+                &self.theme,
+                |this, _w, cx| this.add_heading(3, cx),
+                cx,
+            ))
             .child(div().w(px(8.0)))
-            .child(button("B", false, &self.theme, |this, _w, cx| this.apply_mark(WordMark::Bold, cx), cx))
-            .child(button("I", false, &self.theme, |this, _w, cx| this.apply_mark(WordMark::Italic, cx), cx))
-            .child(button("U", false, &self.theme, |this, _w, cx| this.apply_mark(WordMark::Underline, cx), cx))
-            .child(button("S", false, &self.theme, |this, _w, cx| this.apply_mark(WordMark::Strike, cx), cx))
-            .child(button("</>", false, &self.theme, |this, _w, cx| this.apply_mark(WordMark::Code, cx), cx))
+            .child(button(
+                "B",
+                false,
+                &self.theme,
+                |this, _w, cx| this.apply_mark(WordMark::Bold, cx),
+                cx,
+            ))
+            .child(button(
+                "I",
+                false,
+                &self.theme,
+                |this, _w, cx| this.apply_mark(WordMark::Italic, cx),
+                cx,
+            ))
+            .child(button(
+                "U",
+                false,
+                &self.theme,
+                |this, _w, cx| this.apply_mark(WordMark::Underline, cx),
+                cx,
+            ))
+            .child(button(
+                "S",
+                false,
+                &self.theme,
+                |this, _w, cx| this.apply_mark(WordMark::Strike, cx),
+                cx,
+            ))
+            .child(button(
+                "</>",
+                false,
+                &self.theme,
+                |this, _w, cx| this.apply_mark(WordMark::Code, cx),
+                cx,
+            ))
             .child(div().w(px(8.0)))
-            .child(button("替换选中", false, &self.theme, |this, _w, cx| this.replace_selected(cx), cx))
+            .child(button(
+                "替换选中",
+                false,
+                &self.theme,
+                |this, _w, cx| this.replace_selected(cx),
+                cx,
+            ))
     }
 
     fn render_ppt(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -674,9 +964,27 @@ impl DocForgeApp {
                     .bg(c.panel)
                     .border_r_1()
                     .border_color(rgba(0xffffff20))
-                    .child(button("+ 标题页", false, &self.theme, |this, _w, cx| this.add_slide("title", cx), cx))
-                    .child(button("+ 标题正文", false, &self.theme, |this, _w, cx| this.add_slide("titleBody", cx), cx))
-                    .child(button("+ 双栏", false, &self.theme, |this, _w, cx| this.add_slide("twoContent", cx), cx))
+                    .child(button(
+                        "+ 标题页",
+                        false,
+                        &self.theme,
+                        |this, _w, cx| this.add_slide("title", cx),
+                        cx,
+                    ))
+                    .child(button(
+                        "+ 标题正文",
+                        false,
+                        &self.theme,
+                        |this, _w, cx| this.add_slide("titleBody", cx),
+                        cx,
+                    ))
+                    .child(button(
+                        "+ 双栏",
+                        false,
+                        &self.theme,
+                        |this, _w, cx| this.add_slide("twoContent", cx),
+                        cx,
+                    ))
                     .child(div().h(px(8.0)))
                     .children(slides.iter().enumerate().map(|(i, s)| {
                         let id = s.id.clone();
@@ -728,9 +1036,22 @@ impl DocForgeApp {
             for el in &slide.elements {
                 let el_id = el.id.clone();
                 let is_sel = selected_el.as_deref() == Some(el.id.as_str());
-                let text = el.props.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let font = el.props.get("fontSize").and_then(|v| v.as_f64()).unwrap_or(18.0) as f32;
-                let fill = el.props.get("fill").and_then(|v| v.as_str()).map(crate::app::parse_hex);
+                let text = el
+                    .props
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let font = el
+                    .props
+                    .get("fontSize")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(18.0) as f32;
+                let fill = el
+                    .props
+                    .get("fill")
+                    .and_then(|v| v.as_str())
+                    .map(crate::app::parse_hex);
                 let mut node = div()
                     .absolute()
                     .left(px(el.geo.x as f32 * PPT_SCALE))
@@ -765,7 +1086,9 @@ impl DocForgeApp {
             let _ = selected_slide;
         } else {
             canvas = canvas.flex().items_center().justify_center().child(
-                div().text_color(rgb(0x9ca3af)).child("无幻灯片，请在左侧添加"),
+                div()
+                    .text_color(rgb(0x9ca3af))
+                    .child("无幻灯片，请在左侧添加"),
             );
         }
         canvas
@@ -798,13 +1121,19 @@ impl DocForgeApp {
                     .text_color(rgb(0x111111))
                     .child(self.composer.clone()),
             )
-            .child(button(apply_label, false, &self.theme, move |this, _w, cx| {
-                if this.state.mode == DocForgeMode::Ppt {
-                    this.apply_element_text(cx);
-                } else {
-                    this.replace_selected(cx);
-                }
-            }, cx))
+            .child(button(
+                apply_label,
+                false,
+                &self.theme,
+                move |this, _w, cx| {
+                    if this.state.mode == DocForgeMode::Ppt {
+                        this.apply_element_text(cx);
+                    } else {
+                        this.replace_selected(cx);
+                    }
+                },
+                cx,
+            ))
     }
 
     fn render_statusbar(&self) -> impl IntoElement {
@@ -816,6 +1145,152 @@ impl DocForgeApp {
             .text_color(c.muted)
             .text_size(px(12.0))
             .child(self.status.clone())
+    }
+
+    /// Workspace preview: document body only, no toolbars or composer.
+    fn render_preview_only(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        match self.state.mode {
+            DocForgeMode::Word => self.render_word_preview_only().into_any_element(),
+            DocForgeMode::Ppt => self.render_ppt_preview_only(cx).into_any_element(),
+        }
+    }
+
+    fn render_word_preview_only(&self) -> impl IntoElement {
+        let ir = self.state.word.core.read_document();
+        let blocks = match &ir {
+            DocIR::Word { blocks } => blocks.clone(),
+            _ => Vec::new(),
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .p_8()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .child(
+                div()
+                    .w(px(720.))
+                    .max_w_full()
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_10()
+                    .bg(rgb(0xffffff))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgba(0x00000010))
+                    .text_color(rgb(0x111111))
+                    .children(blocks.iter().map(|b| {
+                        let size = match b.block_type {
+                            WordBlockType::Heading => match b.level.unwrap_or(1) {
+                                1 => 28.0,
+                                2 => 22.0,
+                                3 => 18.0,
+                                _ => 16.0,
+                            },
+                            WordBlockType::Paragraph => 15.0,
+                        };
+                        let mut d = div().text_size(px(size)).child(block_plain_text(b));
+                        if matches!(b.block_type, WordBlockType::Heading) {
+                            d = d.font_weight(gpui::FontWeight::BOLD);
+                        }
+                        d
+                    })),
+                    ),
+            )
+    }
+
+    fn render_ppt_preview_only(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let ir = self.state.ppt.core.read_document();
+        let slides = match &ir {
+            DocIR::Ppt { slides } => slides.clone(),
+            _ => Vec::new(),
+        };
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .p_8()
+            .children(slides.iter().enumerate().map(|(i, slide)| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(rgb(0x6b7280))
+                                    .child(format!("幻灯片 {}", i + 1)),
+                            )
+                            .child(self.render_ppt_slide_readonly(slide.clone(), cx))
+                    }))
+    }
+
+    fn render_ppt_slide_readonly(
+        &self,
+        slide: moonlit_doccore::Slide,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let width = px(10.0 * PPT_SCALE);
+        let height = px(5.625 * PPT_SCALE);
+        let mut canvas = div()
+            .relative()
+            .w(width)
+            .h(height)
+            .bg(rgb(0xffffff))
+            .rounded_md()
+            .border_1()
+            .border_color(rgba(0x00000012));
+        for el in &slide.elements {
+            let text = el
+                .props
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let font = el
+                .props
+                .get("fontSize")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(18.0) as f32;
+            let bold = el
+                .props
+                .get("bold")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let fill = el
+                .props
+                .get("fill")
+                .and_then(|v| v.as_str())
+                .map(parse_hex);
+            let mut node = div()
+                .absolute()
+                .left(px(el.geo.x as f32 * PPT_SCALE))
+                .top(px(el.geo.y as f32 * PPT_SCALE))
+                .w(px(el.geo.w as f32 * PPT_SCALE))
+                .h(px(el.geo.h as f32 * PPT_SCALE))
+                .text_color(rgb(0x111111))
+                .text_size(px(font))
+                .overflow_hidden();
+            if bold {
+                node = node.font_weight(gpui::FontWeight::BOLD);
+            }
+            if let Some(fill) = fill {
+                node = node.bg(fill);
+            }
+            if !text.is_empty() {
+                node = node.child(text);
+            }
+            canvas = canvas.child(node);
+        }
+        canvas
     }
 }
 

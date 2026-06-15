@@ -10,6 +10,11 @@ description = "Native Rust Agent IDE shell."
 [dependencies]
 moonlit-api.workspace = true
 moonlit-core.workspace = true
+moonlit-doccore.workspace = true
+moonlit-compile.workspace = true
+moonlit-preview.workspace = true
+moonlit-sync.workspace = true
+moonlit-docforge.workspace = true
 moonlit-uikit = { workspace = true, features = ["gpui-backend"] }
 gpui.workspace = true
 tokio = { workspace = true }

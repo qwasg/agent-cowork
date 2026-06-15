@@ -33,9 +33,9 @@ where
     }
 }
 
-use crate::api::gateway::AppServices;
 use crate::api::sse;
-use crate::contracts::ApiResult;
+use crate::api::AppServices;
+use agent_protocol::ApiResult;
 
 type App = State<Arc<AppServices>>;
 
@@ -70,7 +70,15 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
 
 pub fn router(app: Arc<AppServices>) -> Router {
     Router::new()
-        .route("/health", get(|| async { Json(json!({ "ok": true })) }))
+        .route(
+            "/health",
+            get(|| async {
+                Json(json!({
+                    "ok": true,
+                    "storeWriteFailures": agent_store::write_failure_count(),
+                }))
+            }),
+        )
         // auth
         .route("/api/agent-debug/auth/register", post(auth_register))
         .route("/api/agent-debug/auth/login", post(auth_login))
@@ -133,9 +141,20 @@ pub fn router(app: Arc<AppServices>) -> Router {
             get(get_perm).put(set_perm),
         )
         .route(
+            "/api/agent-debug/permissions/rules",
+            get(get_permission_rules).put(put_permission_rules),
+        )
+        .route(
             "/api/agent-debug/permissions/{seg}",
             post(permission_action),
         )
+        // hooks / shells
+        .route("/api/agent-debug/hooks", get(list_hooks))
+        .route("/api/agent-debug/shells", get(list_shells))
+        .route("/api/agent-debug/shells/{id}/output", get(get_shell_output))
+        .route("/api/agent-debug/shells/{seg}", post(shell_action))
+        // openapi
+        .route("/api/agent-debug/openapi.json", get(openapi_json))
         .route(
             "/api/agent-debug/subagents",
             get(|State(a): App| async move { Json(a.list_builtin_subagents()) }),
@@ -159,6 +178,15 @@ pub fn router(app: Arc<AppServices>) -> Router {
         // mcp demo
         .route("/api/agent-debug/mcp/demo/status", get(mcp_status))
         .route("/api/agent-debug/mcp/demo/call", post(mcp_call))
+        // mcp generic servers
+        .route(
+            "/api/agent-debug/mcp/servers",
+            get(mcp_servers).put(mcp_set_servers),
+        )
+        .route(
+            "/api/agent-debug/mcp/servers/{seg}",
+            post(mcp_server_action),
+        )
         // chat / plan
         .route(
             "/api/agent-debug/sessions/{id}/plan:generate",
@@ -192,6 +220,15 @@ pub fn router(app: Arc<AppServices>) -> Router {
         // proposals
         .route("/api/agent-debug/proposals", get(list_proposals))
         .route("/api/agent-debug/proposals/{id}", post(proposal_action))
+        // memories (long-term structured memory)
+        .route(
+            "/api/agent-debug/memories",
+            get(list_memories).post(create_memory),
+        )
+        .route(
+            "/api/agent-debug/memories/{id}",
+            patch(patch_memory).delete(delete_memory),
+        )
         // replay / swarm / workspace / tools
         .route("/api/agent-debug/replay/{id}", get(get_replay))
         .route("/api/agent-debug/replay/{id}/since", get(replay_since))
@@ -213,6 +250,10 @@ pub fn router(app: Arc<AppServices>) -> Router {
         .route(
             "/api/agent-debug/workspace/file",
             get(read_ws_file).post(write_ws_file),
+        )
+        .route(
+            "/api/agent-debug/workspace/document",
+            get(read_ws_document).put(write_ws_document),
         )
         .route("/api/agent-debug/workspace/revert", post(revert_ws_file))
         .route(
@@ -289,6 +330,10 @@ async fn create_session(State(a): App, body: OptJson) -> Json<Value> {
             p.get("title")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Agent Debug Session"),
+            p.get("agentKind")
+                .or_else(|| p.get("agent_kind"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("coding"),
             p.get("selectedModelId")
                 .and_then(|v| v.as_str())
                 .map(String::from),
@@ -321,7 +366,11 @@ async fn session_action(
         "fork" => resp(a.fork_session(&id)),
         "revert" => {
             let p = body_or_empty(body);
-            resp(a.revert_session(&id, p.get("messageId").and_then(|v| v.as_str())))
+            resp(a.revert_session(
+                &id,
+                p.get("messageId").and_then(|v| v.as_str()),
+                p.get("mode").and_then(|v| v.as_str()),
+            ))
         }
         _ => (
             StatusCode::NOT_FOUND,
@@ -359,7 +408,10 @@ async fn get_model_prefs(State(a): App) -> Json<Value> {
 }
 async fn set_model_prefs(State(a): App, body: OptJson) -> impl IntoResponse {
     let p = body_or_empty(body);
-    resp(a.set_model_preferences(p.get("modelId").and_then(|v| v.as_str()).unwrap_or("")))
+    resp(
+        a.set_model_preferences(p.get("modelId").and_then(|v| v.as_str()).unwrap_or(""))
+            .await,
+    )
 }
 
 // ----- channels -----
@@ -368,23 +420,60 @@ async fn list_channels(State(a): App) -> Json<Value> {
     Json(a.list_channels())
 }
 async fn create_channel(State(a): App, body: OptJson) -> impl IntoResponse {
-    resp(a.upsert_channel(&body_or_empty(body)))
+    resp(a.upsert_channel(&body_or_empty(body)).await)
 }
 async fn update_channel(State(a): App, Path(id): Path<String>, body: OptJson) -> impl IntoResponse {
     let mut p = body_or_empty(body);
     if let Value::Object(ref mut m) = p {
         m.insert("id".to_string(), json!(id));
     }
-    resp(a.upsert_channel(&p))
+    resp(a.upsert_channel(&p).await)
 }
 async fn delete_channel(State(a): App, Path(id): Path<String>) -> impl IntoResponse {
-    resp(a.delete_channel(&id))
+    resp(a.delete_channel(&id).await)
 }
 async fn fetch_models(State(a): App, body: OptJson) -> impl IntoResponse {
     resp(a.fetch_channel_models(&body_or_empty(body)).await)
 }
 
-// ----- permissions / skills -----
+// ----- permissions / hooks / shells -----
+
+async fn get_permission_rules(State(a): App) -> Json<Value> {
+    Json(a.permission_rules())
+}
+async fn put_permission_rules(State(a): App, body: OptJson) -> impl IntoResponse {
+    resp(a.set_permission_rules(&body_or_empty(body)))
+}
+async fn list_hooks(State(a): App) -> Json<Value> {
+    Json(a.list_hooks())
+}
+async fn list_shells(State(a): App) -> Json<Value> {
+    Json(a.list_shells())
+}
+async fn get_shell_output(
+    State(a): App,
+    Path(id): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let offset = q
+        .get("offset")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+    resp(a.shell_output(&id, offset))
+}
+async fn shell_action(State(a): App, Path(seg): Path<String>) -> impl IntoResponse {
+    let (id, action) = split_action(&seg);
+    if action != "kill" {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": { "code": "SHELL_NOT_FOUND", "message": "unknown action" } })),
+        );
+    }
+    (StatusCode::OK, Json(a.kill_shell(&id)))
+}
+async fn openapi_json(State(a): App) -> Json<Value> {
+    Json(a.openapi_document())
+}
 
 async fn get_perm(State(a): App, Path(id): Path<String>) -> Json<Value> {
     Json(a.get_permission_mode(&id))
@@ -458,16 +547,37 @@ async fn events_stream(
 // ----- mcp -----
 
 async fn mcp_status(State(a): App) -> impl IntoResponse {
-    (StatusCode::SERVICE_UNAVAILABLE, Json(a.mcp_demo_status()))
+    (StatusCode::OK, Json(a.mcp_demo_status().await))
+}
+async fn mcp_servers(State(a): App) -> impl IntoResponse {
+    (StatusCode::OK, Json(a.mcp_servers()))
+}
+async fn mcp_set_servers(State(a): App, body: OptJson) -> impl IntoResponse {
+    resp(a.mcp_set_servers(&body_or_empty(body)).await)
+}
+async fn mcp_server_action(State(a): App, Path(seg): Path<String>) -> impl IntoResponse {
+    let (name, action) = split_action(&seg);
+    if action != "reload" {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(
+                json!({ "error": { "code": "MCP_INVALID_REQUEST", "message": "unknown action" } }),
+            ),
+        );
+    }
+    (StatusCode::OK, Json(a.mcp_reload_server(&name).await))
 }
 async fn mcp_call(State(a): App, body: OptJson) -> impl IntoResponse {
     let p = body_or_empty(body);
     (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(a.mcp_demo_call(
-            p.get("name").and_then(|v| v.as_str()).unwrap_or(""),
-            p.get("arguments"),
-        )),
+        StatusCode::OK,
+        Json(
+            a.mcp_demo_call(
+                p.get("name").and_then(|v| v.as_str()).unwrap_or(""),
+                p.get("arguments"),
+            )
+            .await,
+        ),
     )
 }
 
@@ -545,12 +655,13 @@ async fn get_run(State(a): App, Path(seg): Path<String>) -> impl IntoResponse {
     let (id, _action) = split_action(&seg);
     resp(a.get_run(&id))
 }
-async fn run_action(State(a): App, Path(seg): Path<String>) -> impl IntoResponse {
+async fn run_action(State(a): App, Path(seg): Path<String>, body: OptJson) -> impl IntoResponse {
     let (id, action) = split_action(&seg);
     let out = match action.as_str() {
         "pause" => a.pause_run(&id),
         "resume" => a.resume_run(&id),
         "cancel" => a.cancel_run(&id),
+        "steer" => return resp(a.steer_run(&id, &body_or_empty(body))),
         _ => {
             return (
                 StatusCode::NOT_FOUND,
@@ -573,14 +684,14 @@ async fn run_todo_rerun(
     Path((run_id, seg)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let (todo_id, _) = split_action(&seg);
-    resp(a.rerun_todo(&run_id, &todo_id))
+    resp(a.rerun_todo(&run_id, &todo_id).await)
 }
 async fn run_node_rerun(
     State(a): App,
     Path((run_id, seg)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let (node_id, _) = split_action(&seg);
-    resp(a.rerun_node(&run_id, &node_id))
+    resp(a.rerun_node(&run_id, &node_id).await)
 }
 
 // ----- proposals -----
@@ -603,6 +714,24 @@ async fn proposal_action(State(a): App, Path(seg): Path<String>) -> impl IntoRes
             ),
         ),
     }
+}
+
+// ----- memories -----
+
+async fn list_memories(State(a): App, Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    Json(a.list_memories(
+        q.get("scope").map(|s| s.as_str()),
+        q.get("sessionId").map(|s| s.as_str()),
+    ))
+}
+async fn create_memory(State(a): App, body: OptJson) -> impl IntoResponse {
+    resp(a.create_memory(&body_or_empty(body)))
+}
+async fn patch_memory(State(a): App, Path(id): Path<String>, body: OptJson) -> impl IntoResponse {
+    resp(a.patch_memory(&id, &body_or_empty(body)))
+}
+async fn delete_memory(State(a): App, Path(id): Path<String>) -> impl IntoResponse {
+    resp(a.delete_memory(&id))
 }
 
 // ----- replay / workspace -----
@@ -638,7 +767,10 @@ async fn workspace_browse(
 }
 async fn workspace_root(State(a): App, body: OptJson) -> impl IntoResponse {
     let p = body_or_empty(body);
-    resp(a.set_workspace_root(p.get("path").and_then(|v| v.as_str()).unwrap_or("")))
+    resp(
+        a.set_workspace_root(p.get("path").and_then(|v| v.as_str()).unwrap_or(""))
+            .await,
+    )
 }
 async fn read_ws_file(
     State(a): App,
@@ -651,6 +783,19 @@ async fn write_ws_file(State(a): App, body: OptJson) -> impl IntoResponse {
     resp(a.write_workspace_file(
         p.get("path").and_then(|v| v.as_str()).unwrap_or(""),
         p.get("content").and_then(|v| v.as_str()).unwrap_or(""),
+    ))
+}
+async fn read_ws_document(
+    State(a): App,
+    Query(q): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    resp(a.read_workspace_document(q.get("path").map(|s| s.as_str()).unwrap_or("")))
+}
+async fn write_ws_document(State(a): App, body: OptJson) -> impl IntoResponse {
+    let p = body_or_empty(body);
+    resp(a.write_workspace_document(
+        p.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+        p.get("ir").unwrap_or(&serde_json::Value::Null),
     ))
 }
 async fn revert_ws_file(State(a): App, body: OptJson) -> impl IntoResponse {

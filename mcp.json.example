@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "demo": {
+      "command": "path/to/mcp-demo-server",
+      "enabled": true
+    }
+  }
+}

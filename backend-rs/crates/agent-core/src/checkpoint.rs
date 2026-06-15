@@ -8,10 +8,10 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::contracts::models::{new_id, now_ts};
-use crate::contracts::{ApiError, ApiResult};
-use crate::infra::store::{IDX_CHECKPOINTS_BY_SESSION, T_CHECKPOINTS};
-use crate::infra::Store;
+use agent_protocol::models::{new_id, now_ts};
+use agent_protocol::{ApiError, ApiResult};
+use agent_store::store::{IDX_CHECKPOINTS_BY_SESSION, T_CHECKPOINTS};
+use agent_store::Store;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FileSnapshot {
@@ -26,6 +26,10 @@ struct Checkpoint {
     session_id: String,
     label: String,
     files: Vec<FileSnapshot>,
+    /// Event-bus seq at creation time; rewind truncates the session's event
+    /// stream back to this point (parity with the plan's rewind semantics).
+    #[serde(default)]
+    event_seq: i64,
     created_at: String,
 }
 
@@ -65,7 +69,12 @@ impl CheckpointService {
                 .collect()
         } else {
             ids.iter()
-                .filter_map(|id| self.store.get::<Checkpoint>(T_CHECKPOINTS, id).ok().flatten())
+                .filter_map(|id| {
+                    self.store
+                        .get::<Checkpoint>(T_CHECKPOINTS, id)
+                        .ok()
+                        .flatten()
+                })
                 .collect()
         };
         let items: Vec<Value> = checkpoints
@@ -76,6 +85,7 @@ impl CheckpointService {
                     "sessionId": c.session_id,
                     "label": c.label,
                     "fileCount": c.files.len(),
+                    "eventSeq": c.event_seq,
                     "createdAt": c.created_at,
                 })
             })
@@ -83,7 +93,13 @@ impl CheckpointService {
         json!({ "checkpoints": items })
     }
 
-    pub fn create(&self, session_id: &str, paths: Option<Vec<String>>, label: &str) -> Value {
+    pub fn create(
+        &self,
+        session_id: &str,
+        paths: Option<Vec<String>>,
+        label: &str,
+        event_seq: i64,
+    ) -> Value {
         let root = self.workspace_root();
         let mut files = Vec::new();
         for rel in paths.unwrap_or_default() {
@@ -103,6 +119,7 @@ impl CheckpointService {
             session_id: session_id.to_string(),
             label: label.to_string(),
             files,
+            event_seq,
             created_at: now_ts(),
         };
         let _ = self.store.put(T_CHECKPOINTS, &cp.id, &cp);
@@ -115,18 +132,21 @@ impl CheckpointService {
                 "sessionId": cp.session_id,
                 "label": cp.label,
                 "fileCount": cp.files.len(),
+                "eventSeq": cp.event_seq,
                 "createdAt": cp.created_at,
             }
         })
     }
 
+    /// Restore the snapshotted files and report the session/seq the caller
+    /// should rewind the event stream to.
     pub fn rewind(&self, checkpoint_id: &str) -> ApiResult<Value> {
         let cp = self
             .store
             .get::<Checkpoint>(T_CHECKPOINTS, checkpoint_id)
             .ok()
             .flatten()
-            .ok_or_else(|| ApiError::new("PROPOSAL_NOT_FOUND", "checkpoint not found"))?;
+            .ok_or_else(|| ApiError::new("CHECKPOINT_NOT_FOUND", "checkpoint not found"))?;
         let root = self.workspace_root();
         let mut restored = Vec::new();
         for f in &cp.files {
@@ -142,6 +162,12 @@ impl CheckpointService {
             }
             restored.push(f.path.clone());
         }
-        Ok(json!({ "ok": true, "restored": restored, "checkpointId": checkpoint_id }))
+        Ok(json!({
+            "ok": true,
+            "restored": restored,
+            "checkpointId": checkpoint_id,
+            "sessionId": cp.session_id,
+            "eventSeq": cp.event_seq,
+        }))
     }
 }

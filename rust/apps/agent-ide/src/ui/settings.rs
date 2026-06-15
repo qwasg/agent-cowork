@@ -223,16 +223,12 @@ pub fn set_select(
             }),
         );
     if open {
-        let mut menu = div()
+        let mut menu = super::float_surface(&t)
             .min_w(px(170.))
             .flex()
             .flex_col()
             .p(px(4.))
-            .rounded(px(8.))
-            .border_1()
-            .border_color(t.line_strong)
-            .bg(t.bg_panel)
-            .shadow(super::sh_float());
+            .rounded(px(8.));
         for (val, lab) in options {
             let is_active = val == value;
             let on_pick = on_pick.clone();
@@ -261,9 +257,9 @@ pub fn set_select(
             );
         }
         wrap = wrap.child(deferred(
-            gpui::anchored().snap_to_window_with_margin(px(8.)).child(
-                div().occlude().mt(px(30.)).child(menu),
-            ),
+            gpui::anchored()
+                .snap_to_window_with_margin(px(8.))
+                .child(div().occlude().mt(px(30.)).child(menu)),
         ));
     }
     wrap
@@ -364,9 +360,15 @@ pub fn set_slider(
         }
         track = track.child(bands);
     } else {
-        track = track
-            .bg(gpui::rgba(0x2a272426))
-            .child(div().absolute().left_0().top_0().bottom_0().w(gpui::relative(ratio)).bg(t.accent));
+        track = track.bg(gpui::rgba(0x2a272426)).child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(gpui::relative(ratio))
+                .bg(t.accent),
+        );
     }
     // Record track geometry for drag math (window coords).
     let geom_for_paint = geom.clone();
@@ -487,7 +489,13 @@ pub fn set_code_preview(code_size: f32, t: &Tokens) -> Div {
                     .border_color(t.line)
                     .child(div().w_full().flex().justify_end().child(ln)),
             )
-            .child(div().pl(px(10.)).text_size(px(code_size)).text_color(t.text).child(code))
+            .child(
+                div()
+                    .pl(px(10.))
+                    .text_size(px(code_size))
+                    .text_color(t.text)
+                    .child(code),
+            )
     };
     div()
         .mx(px(16.))
@@ -640,7 +648,11 @@ pub fn sm_btn(
     cx: &mut Context<AgentIdeApp>,
 ) -> Div {
     let t = *t;
-    let (bg, fg) = if accent { (t.accent, t.bg) } else { (t.bg_panel, t.text) };
+    let (bg, fg) = if accent {
+        (t.accent, t.bg)
+    } else {
+        (t.bg_panel, t.text)
+    };
     div()
         .h(px(26.))
         .px(px(10.))
@@ -656,7 +668,13 @@ pub fn sm_btn(
         .text_size(px(12.))
         .text_color(fg)
         .cursor_pointer()
-        .hover(move |s| if accent { s.bg(t.accent_soft) } else { s.bg(t.bg_hover) })
+        .hover(move |s| {
+            if accent {
+                s.bg(t.accent_soft)
+            } else {
+                s.bg(t.bg_hover)
+            }
+        })
         .child(label.into())
         .on_mouse_down(
             MouseButton::Left,
@@ -674,35 +692,99 @@ pub fn sm_btn(
 use crate::app::{CrudField, CrudFieldKind};
 
 static RULE_FIELDS: &[CrudField] = &[
-    CrudField { key: "name", label: "名称", required: true, placeholder: "例如 始终用简体中文回答", kind: CrudFieldKind::Text },
+    CrudField {
+        key: "name",
+        label: "名称",
+        required: true,
+        placeholder: "例如 始终用简体中文回答",
+        kind: CrudFieldKind::Text,
+    },
     CrudField {
         key: "trigger",
         label: "触发方式",
         required: false,
         placeholder: "",
-        kind: CrudFieldKind::Select(&[("always", "总是"), ("path", "按文件路径"), ("manual", "手动")]),
+        kind: CrudFieldKind::Select(&[
+            ("always", "总是"),
+            ("path", "按文件路径"),
+            ("manual", "手动"),
+        ]),
     },
-    CrudField { key: "content", label: "规则内容", required: false, placeholder: "用一句话描述对 Agent 的约束…", kind: CrudFieldKind::Textarea },
+    CrudField {
+        key: "content",
+        label: "规则内容",
+        required: false,
+        placeholder: "用一句话描述对 Agent 的约束…",
+        kind: CrudFieldKind::Textarea,
+    },
 ];
 
 static SKILL_FIELDS: &[CrudField] = &[
-    CrudField { key: "name", label: "名称", required: true, placeholder: "例如 pdf", kind: CrudFieldKind::Text },
-    CrudField { key: "desc", label: "描述", required: false, placeholder: "这个技能在什么场景下使用…", kind: CrudFieldKind::Textarea },
+    CrudField {
+        key: "name",
+        label: "名称",
+        required: true,
+        placeholder: "例如 pdf",
+        kind: CrudFieldKind::Text,
+    },
+    CrudField {
+        key: "desc",
+        label: "描述",
+        required: false,
+        placeholder: "这个技能在什么场景下使用…",
+        kind: CrudFieldKind::Textarea,
+    },
 ];
 
 static SUBAGENT_FIELDS: &[CrudField] = &[
-    CrudField { key: "name", label: "名称", required: true, placeholder: "例如 doc-reviewer", kind: CrudFieldKind::Text },
-    CrudField { key: "desc", label: "职责描述", required: false, placeholder: "这个子 Agent 负责…", kind: CrudFieldKind::Textarea },
-    CrudField { key: "tools", label: "可用工具", required: false, placeholder: "逗号分隔，如 read,grep,write", kind: CrudFieldKind::Text },
+    CrudField {
+        key: "name",
+        label: "名称",
+        required: true,
+        placeholder: "例如 doc-reviewer",
+        kind: CrudFieldKind::Text,
+    },
+    CrudField {
+        key: "desc",
+        label: "职责描述",
+        required: false,
+        placeholder: "这个子 Agent 负责…",
+        kind: CrudFieldKind::Textarea,
+    },
+    CrudField {
+        key: "tools",
+        label: "可用工具",
+        required: false,
+        placeholder: "逗号分隔，如 read,grep,write",
+        kind: CrudFieldKind::Text,
+    },
 ];
 
 static COMMAND_FIELDS: &[CrudField] = &[
-    CrudField { key: "name", label: "命令名", required: true, placeholder: "例如 /review", kind: CrudFieldKind::Text },
-    CrudField { key: "prompt", label: "提示词", required: false, placeholder: "触发该命令时注入的提示…", kind: CrudFieldKind::Textarea },
+    CrudField {
+        key: "name",
+        label: "命令名",
+        required: true,
+        placeholder: "例如 /review",
+        kind: CrudFieldKind::Text,
+    },
+    CrudField {
+        key: "prompt",
+        label: "提示词",
+        required: false,
+        placeholder: "触发该命令时注入的提示…",
+        kind: CrudFieldKind::Textarea,
+    },
 ];
 
 static MCP_USER_FIELDS: &[CrudField] = &[
-    CrudField { key: "name", label: "服务名称", required: true, placeholder: "例如 filesystem", kind: CrudFieldKind::Text },
+    CrudField {
+        key: "name",
+        label: "服务名称",
+        required: true,
+        placeholder: "例如 filesystem",
+        kind: CrudFieldKind::Text,
+    },
     CrudField {
         key: "transport",
         label: "传输方式",
@@ -710,12 +792,30 @@ static MCP_USER_FIELDS: &[CrudField] = &[
         placeholder: "",
         kind: CrudFieldKind::Select(&[("stdio", "stdio（本地命令）"), ("url", "URL（远程）")]),
     },
-    CrudField { key: "command", label: "启动命令", required: false, placeholder: "stdio：如 npx -y @modelcontextprotocol/server-filesystem ./", kind: CrudFieldKind::Text },
-    CrudField { key: "url", label: "服务地址", required: false, placeholder: "URL：如 http://127.0.0.1:9000/sse", kind: CrudFieldKind::Text },
+    CrudField {
+        key: "command",
+        label: "启动命令",
+        required: false,
+        placeholder: "stdio：如 npx -y @modelcontextprotocol/server-filesystem ./",
+        kind: CrudFieldKind::Text,
+    },
+    CrudField {
+        key: "url",
+        label: "服务地址",
+        required: false,
+        placeholder: "URL：如 http://127.0.0.1:9000/sse",
+        kind: CrudFieldKind::Text,
+    },
 ];
 
 static MCP_TEAM_FIELDS: &[CrudField] = &[
-    CrudField { key: "name", label: "服务名称", required: true, placeholder: "例如 team-knowledge", kind: CrudFieldKind::Text },
+    CrudField {
+        key: "name",
+        label: "服务名称",
+        required: true,
+        placeholder: "例如 team-knowledge",
+        kind: CrudFieldKind::Text,
+    },
     CrudField {
         key: "transport",
         label: "传输方式",
@@ -723,8 +823,20 @@ static MCP_TEAM_FIELDS: &[CrudField] = &[
         placeholder: "",
         kind: CrudFieldKind::Select(&[("url", "URL（远程）"), ("stdio", "stdio（本地命令）")]),
     },
-    CrudField { key: "command", label: "启动命令", required: false, placeholder: "stdio：如 uvx mcp-server-xxx", kind: CrudFieldKind::Text },
-    CrudField { key: "url", label: "服务地址", required: false, placeholder: "URL：如 https://mcp.example.com/sse", kind: CrudFieldKind::Text },
+    CrudField {
+        key: "command",
+        label: "启动命令",
+        required: false,
+        placeholder: "stdio：如 uvx mcp-server-xxx",
+        kind: CrudFieldKind::Text,
+    },
+    CrudField {
+        key: "url",
+        label: "服务地址",
+        required: false,
+        placeholder: "URL：如 https://mcp.example.com/sse",
+        kind: CrudFieldKind::Text,
+    },
 ];
 
 /// `PLAN_TIERS` — 套餐与用量页的档位表.
@@ -739,13 +851,29 @@ static PROVIDER_FALLBACK: &[(&str, &str, &str)] = &[
     ("deepseek", "DeepSeek", "https://api.deepseek.com/anthropic"),
     ("anthropic", "Anthropic", "https://api.anthropic.com"),
     ("openai", "OpenAI", "https://api.openai.com/v1"),
-    ("kimi-api", "Kimi (Moonshot)", "https://api.moonshot.cn/anthropic"),
-    ("kimi-coding", "Kimi Coding", "https://api.kimi.com/coding/v1"),
+    (
+        "kimi-api",
+        "Kimi (Moonshot)",
+        "https://api.moonshot.cn/anthropic",
+    ),
+    (
+        "kimi-coding",
+        "Kimi Coding",
+        "https://api.kimi.com/coding/v1",
+    ),
     ("zhipu", "智谱 GLM", "https://open.bigmodel.cn/api/paas/v4"),
     ("minimax", "MiniMax", "https://api.minimaxi.com/anthropic"),
     ("doubao", "豆包", "https://ark.cn-beijing.volces.com/api/v3"),
-    ("qwen", "通义千问", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
-    ("google", "Google Gemini", "https://generativelanguage.googleapis.com"),
+    (
+        "qwen",
+        "通义千问",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ),
+    (
+        "google",
+        "Google Gemini",
+        "https://generativelanguage.googleapis.com",
+    ),
     ("custom", "自定义", ""),
 ];
 
@@ -762,8 +890,13 @@ static NAV_GROUPS: &[&[(crate::SettingsPage, &str, &str)]] = &[
         (crate::SettingsPage::Models, "模型", "boxes"),
     ],
     &[
-        (crate::SettingsPage::Rules, "规则 · 技能 · 子 Agent", "book-open"),
+        (
+            crate::SettingsPage::Rules,
+            "规则 · 技能 · 子 Agent",
+            "book-open",
+        ),
         (crate::SettingsPage::Tools, "工具与 MCP", "puzzle"),
+        (crate::SettingsPage::Memory, "记忆", "brain"),
     ],
 ];
 
@@ -963,7 +1096,11 @@ impl AgentIdeApp {
                         })
                         .cursor_pointer()
                         .hover(move |s| s.bg(t.bg_hover).text_color(t.text))
-                        .child(icon(icon_name, 13., if is_active { t.accent } else { t.text_3 }))
+                        .child(icon(
+                            icon_name,
+                            13.,
+                            if is_active { t.accent } else { t.text_3 },
+                        ))
                         .child(*label)
                         .on_mouse_down(
                             MouseButton::Left,
@@ -1003,7 +1140,11 @@ impl AgentIdeApp {
                             .font_family(FONT_SERIF)
                             .text_size(px(13.))
                             .font_weight(gpui::FontWeight::BOLD)
-                            .child(if avatar.is_empty() { "月".to_string() } else { avatar }),
+                            .child(if avatar.is_empty() {
+                                "月".to_string()
+                            } else {
+                                avatar
+                            }),
                     )
                     .child(
                         div()
@@ -1040,6 +1181,7 @@ impl AgentIdeApp {
             crate::SettingsPage::Models => self.set_page_models(cx).into_any_element(),
             crate::SettingsPage::Rules => self.set_page_rules(cx).into_any_element(),
             crate::SettingsPage::Tools => self.set_page_tools(cx).into_any_element(),
+            crate::SettingsPage::Memory => self.set_page_memory(cx).into_any_element(),
         }
     }
 
@@ -1069,7 +1211,10 @@ impl AgentIdeApp {
                         .and_then(|v| v.as_str())
                         .unwrap_or("Free")
                 ),
-                u.get("email").and_then(|v| v.as_str()).unwrap_or("—").to_string(),
+                u.get("email")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("—")
+                    .to_string(),
             ),
             None => (
                 "月夜账户".to_string(),
@@ -1094,16 +1239,19 @@ impl AgentIdeApp {
             .cursor_pointer()
             .hover(move |s| s.bg(t.bg_hover))
             .child(if acct_open { "收起" } else { "编辑" })
-            .child(icon(if acct_open { "chevron-up" } else { "pencil" }, 11., t.text_2))
+            .child(icon(
+                if acct_open { "chevron-up" } else { "pencil" },
+                11.,
+                t.text_2,
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
                     this.acct_open = !this.acct_open;
                     if this.acct_open {
                         let u = this.auth_profile.clone().unwrap_or_default();
-                        let get = |k: &str| {
-                            u.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string()
-                        };
+                        let get =
+                            |k: &str| u.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
                         for (key, val) in [
                             ("acct:name", get("displayName")),
                             ("acct:ws", get("workspace")),
@@ -1173,9 +1321,19 @@ impl AgentIdeApp {
                         .flex_row()
                         .justify_end()
                         .gap(px(8.))
-                        .child(sm_btn("取消", false, &t, |this, _cx| this.acct_open = false, cx))
                         .child(sm_btn(
-                            if acct_saving { "保存中…" } else { "保存" },
+                            "取消",
+                            false,
+                            &t,
+                            |this, _cx| this.acct_open = false,
+                            cx,
+                        ))
+                        .child(sm_btn(
+                            if acct_saving {
+                                "保存中…"
+                            } else {
+                                "保存"
+                            },
                             true,
                             &t,
                             |this, cx| {
@@ -1308,7 +1466,16 @@ impl AgentIdeApp {
             .flex_row()
             .items_center()
             .gap(px(10.))
-            .child(set_slider("slider-hue", hue as f32, 0., 360., true, &t, geom.clone(), cx))
+            .child(set_slider(
+                "slider-hue",
+                hue as f32,
+                0.,
+                360.,
+                true,
+                &t,
+                geom.clone(),
+                cx,
+            ))
             .child(
                 div()
                     .w(px(14.))
@@ -1351,40 +1518,60 @@ impl AgentIdeApp {
             .flex()
             .flex_col()
             .child(set_h1("外观", &t))
-            .child(set_card(&t).child(srow(
-                "主题",
-                "在浅色 / 深色 / 高对比度之间选择",
-                Some(
-                    set_select(
-                        "theme",
-                        theme,
-                        vec![
-                            ("auto".into(), "跟随系统".into()),
-                            ("light".into(), "浅色".into()),
-                            ("dark".into(), "深色".into()),
-                        ],
-                        &t,
-                        self,
-                        |this, v, cx| this.set_theme_choice(&v, cx),
-                        cx,
-                    )
-                    .into_any_element(),
-                ),
-                true,
-                &t,
-            )))
+            .child(
+                set_card(&t).child(srow(
+                    "主题",
+                    "在浅色 / 深色 / 高对比度之间选择",
+                    Some(
+                        set_select(
+                            "theme",
+                            theme,
+                            vec![
+                                ("auto".into(), "跟随系统".into()),
+                                ("light".into(), "浅色".into()),
+                                ("dark".into(), "深色".into()),
+                            ],
+                            &t,
+                            self,
+                            |this, v, cx| this.set_theme_choice(&v, cx),
+                            cx,
+                        )
+                        .into_any_element(),
+                    ),
+                    true,
+                    &t,
+                )),
+            )
             .child(set_section_label("颜色", &t))
             .child(
                 set_card(&t)
-                    .child(srow("色相", "调整界面着色", Some(hue_control.into_any_element()), false, &t))
-                    .child(srow("强度", "控制着色应用强度", Some(intensity_control.into_any_element()), false, &t))
+                    .child(srow(
+                        "色相",
+                        "调整界面着色",
+                        Some(hue_control.into_any_element()),
+                        false,
+                        &t,
+                    ))
+                    .child(srow(
+                        "强度",
+                        "控制着色应用强度",
+                        Some(intensity_control.into_any_element()),
+                        false,
+                        &t,
+                    ))
                     .child(srow(
                         "降低透明度",
                         "用不透明背景替换半透明效果",
                         Some(
-                            set_toggle(self.s_bool("moonlit:s:reduceTransp", false), &t, |this, _| {
-                                this.s_flip("moonlit:s:reduceTransp", false)
-                            }, cx)
+                            set_toggle(
+                                self.s_bool("moonlit:s:reduceTransp", true),
+                                &t,
+                                |this, cx| {
+                                    this.s_flip("moonlit:s:reduceTransp", true);
+                                    this.refresh_appearance_tokens(cx);
+                                },
+                                cx,
+                            )
                             .into_any_element(),
                         ),
                         true,
@@ -1398,9 +1585,14 @@ impl AgentIdeApp {
                         "界面字号",
                         "UI 文字大小（标题、菜单、面板）",
                         Some(
-                            set_stepper(ui_size, 11, 18, &t, |this, v, _| {
-                                this.s_set_int("moonlit:s:uiSize", v)
-                            }, cx)
+                            set_stepper(
+                                ui_size,
+                                11,
+                                18,
+                                &t,
+                                |this, v, _| this.s_set_int("moonlit:s:uiSize", v),
+                                cx,
+                            )
                             .into_any_element(),
                         ),
                         false,
@@ -1410,9 +1602,14 @@ impl AgentIdeApp {
                         "代码字号",
                         "代码编辑器与 diff 视图字号",
                         Some(
-                            set_stepper(code_size, 10, 20, &t, |this, v, _| {
-                                this.s_set_int("moonlit:s:codeSize", v)
-                            }, cx)
+                            set_stepper(
+                                code_size,
+                                10,
+                                20,
+                                &t,
+                                |this, v, _| this.s_set_int("moonlit:s:codeSize", v),
+                                cx,
+                            )
                             .into_any_element(),
                         ),
                         false,
@@ -1435,18 +1632,23 @@ impl AgentIdeApp {
                     .child(set_code_preview(code_size as f32, &t)),
             )
             .child(set_section_label("隐私", &t))
-            .child(set_card(&t).child(srow(
-                "隐藏邮箱地址",
-                "在 UI 中部分遮蔽邮箱",
-                Some(
-                    set_toggle(self.s_bool("moonlit:s:hideEmail", false), &t, |this, _| {
-                        this.s_flip("moonlit:s:hideEmail", false)
-                    }, cx)
-                    .into_any_element(),
-                ),
-                true,
-                &t,
-            )))
+            .child(
+                set_card(&t).child(srow(
+                    "隐藏邮箱地址",
+                    "在 UI 中部分遮蔽邮箱",
+                    Some(
+                        set_toggle(
+                            self.s_bool("moonlit:s:hideEmail", false),
+                            &t,
+                            |this, _| this.s_flip("moonlit:s:hideEmail", false),
+                            cx,
+                        )
+                        .into_any_element(),
+                    ),
+                    true,
+                    &t,
+                )),
+            )
     }
 
     // ---- 套餐与用量 ----------------------------------------------------------------
@@ -1455,9 +1657,21 @@ impl AgentIdeApp {
         let t = self.t;
         let user = self.auth_profile.clone().unwrap_or_default();
         let plan = user.get("plan").cloned().unwrap_or_default();
-        let tier = plan.get("tier").and_then(|v| v.as_str()).unwrap_or("free").to_string();
-        let label = plan.get("label").and_then(|v| v.as_str()).unwrap_or("Free").to_string();
-        let price = plan.get("priceLabel").and_then(|v| v.as_str()).unwrap_or("¥0/月").to_string();
+        let tier = plan
+            .get("tier")
+            .and_then(|v| v.as_str())
+            .unwrap_or("free")
+            .to_string();
+        let label = plan
+            .get("label")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Free")
+            .to_string();
+        let price = plan
+            .get("priceLabel")
+            .and_then(|v| v.as_str())
+            .unwrap_or("¥0/月")
+            .to_string();
         let renews = plan
             .get("renewsAt")
             .and_then(|v| v.as_str())
@@ -1536,17 +1750,36 @@ impl AgentIdeApp {
                             .child(price),
                     ),
             )
-            .child(div().mt(px(8.)).mb(px(12.)).text_size(px(12.)).text_color(t.text_3).child(renews));
+            .child(
+                div()
+                    .mt(px(8.))
+                    .mb(px(12.))
+                    .text_size(px(12.))
+                    .text_color(t.text_3)
+                    .child(renews),
+            );
         current_card = if tier != "free" {
             current_card.child(div().flex().flex_row().child(sm_btn(
                 "降级为 Free",
                 false,
                 &t,
-                |this, cx| this.save_profile_patch(serde_json::json!({"plan": "free"}), "套餐已更新", false, cx),
+                |this, cx| {
+                    this.save_profile_patch(
+                        serde_json::json!({"plan": "free"}),
+                        "套餐已更新",
+                        false,
+                        cx,
+                    )
+                },
                 cx,
             )))
         } else {
-            current_card.child(div().text_size(px(11.)).text_color(t.text_4).child("基础档位"))
+            current_card.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(t.text_4)
+                    .child("基础档位"),
+            )
         };
 
         // 右卡: 可升级 / 已是最高档
@@ -1617,7 +1850,14 @@ impl AgentIdeApp {
                                     .child(up_price),
                             ),
                     )
-                    .child(div().mt(px(8.)).mb(px(12.)).text_size(px(12.)).text_color(t.text_3).child(up_blurb))
+                    .child(
+                        div()
+                            .mt(px(8.))
+                            .mb(px(12.))
+                            .text_size(px(12.))
+                            .text_color(t.text_3)
+                            .child(up_blurb),
+                    )
                     .child(div().flex().flex_row().child(info_btn))
             }
             None => set_card(&t)
@@ -1660,7 +1900,11 @@ impl AgentIdeApp {
                         "累计 tokens",
                         "来自后端实时指标",
                         Some(mono_val(
-                            if connected { format!("{}", m.total_tokens) } else { "—".into() },
+                            if connected {
+                                format!("{}", m.total_tokens)
+                            } else {
+                                "—".into()
+                            },
                             true,
                         )),
                         false,
@@ -1670,45 +1914,57 @@ impl AgentIdeApp {
                         "工具调用",
                         "本会话已执行的工具次数",
                         Some(mono_val(
-                            if connected { format!("{}", m.tool_calls) } else { "—".into() },
+                            if connected {
+                                format!("{}", m.tool_calls)
+                            } else {
+                                "—".into()
+                            },
                             true,
                         )),
                         false,
                         &t,
                     ))
-                    .child(srow("计划进度", "已完成 / 总步骤", Some(mono_val(plan_progress, false)), true, &t)),
+                    .child(srow(
+                        "计划进度",
+                        "已完成 / 总步骤",
+                        Some(mono_val(plan_progress, false)),
+                        true,
+                        &t,
+                    )),
             )
             .child(set_section_label("按需用量", &t))
-            .child(set_card(&t).child(srow(
-                "月度上限",
-                "设置硬性额度，或保持无上限",
-                Some(
-                    set_select(
-                        "cap",
-                        cap,
-                        vec![
-                            ("unlimited".into(), "无上限".into()),
-                            ("100".into(), "¥100".into()),
-                            ("300".into(), "¥300".into()),
-                            ("500".into(), "¥500".into()),
-                        ],
-                        &t,
-                        self,
-                        |this, v, cx| {
-                            this.save_profile_patch(
-                                serde_json::json!({ "monthlyCapRmb": v }),
-                                "月度上限已更新",
-                                false,
-                                cx,
-                            )
-                        },
-                        cx,
-                    )
-                    .into_any_element(),
-                ),
-                true,
-                &t,
-            )))
+            .child(
+                set_card(&t).child(srow(
+                    "月度上限",
+                    "设置硬性额度，或保持无上限",
+                    Some(
+                        set_select(
+                            "cap",
+                            cap,
+                            vec![
+                                ("unlimited".into(), "无上限".into()),
+                                ("100".into(), "¥100".into()),
+                                ("300".into(), "¥300".into()),
+                                ("500".into(), "¥500".into()),
+                            ],
+                            &t,
+                            self,
+                            |this, v, cx| {
+                                this.save_profile_patch(
+                                    serde_json::json!({ "monthlyCapRmb": v }),
+                                    "月度上限已更新",
+                                    false,
+                                    cx,
+                                )
+                            },
+                            cx,
+                        )
+                        .into_any_element(),
+                    ),
+                    true,
+                    &t,
+                )),
+            )
     }
 
     // ---- Agent --------------------------------------------------------------------
@@ -1716,11 +1972,19 @@ impl AgentIdeApp {
     fn set_page_agents(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.t;
         let transitions = self.settings_pinput("moonlit:s:transitions", "例如 agent->plan", cx);
-        let toggle =
-            |this: &mut Self, key: &'static str, default: bool, cx: &mut Context<Self>| -> AnyElement {
-                set_toggle(this.s_bool(key, default), &t, move |app, _| app.s_flip(key, default), cx)
-                    .into_any_element()
-            };
+        let toggle = |this: &mut Self,
+                      key: &'static str,
+                      default: bool,
+                      cx: &mut Context<Self>|
+         -> AnyElement {
+            set_toggle(
+                this.s_bool(key, default),
+                &t,
+                move |app, _| app.s_flip(key, default),
+                cx,
+            )
+            .into_any_element()
+        };
 
         div()
             .flex()
@@ -1732,14 +1996,19 @@ impl AgentIdeApp {
                         "Ctrl + Enter 发送",
                         "启用后，Ctrl+Enter 发送，Enter 换行",
                         Some(
-                            set_toggle(self.state.settings.submit_with_ctrl_enter, &t, |this, _| {
-                                this.state.settings.submit_with_ctrl_enter =
-                                    !this.state.settings.submit_with_ctrl_enter;
-                                this.s_set_bool(
-                                    "moonlit:s:submitCtrl",
-                                    this.state.settings.submit_with_ctrl_enter,
-                                );
-                            }, cx)
+                            set_toggle(
+                                self.state.settings.submit_with_ctrl_enter,
+                                &t,
+                                |this, _| {
+                                    this.state.settings.submit_with_ctrl_enter =
+                                        !this.state.settings.submit_with_ctrl_enter;
+                                    this.s_set_bool(
+                                        "moonlit:s:submitCtrl",
+                                        this.state.settings.submit_with_ctrl_enter,
+                                    );
+                                },
+                                cx,
+                            )
                             .into_any_element(),
                         ),
                         false,
@@ -1809,7 +2078,11 @@ impl AgentIdeApp {
                     ))
                     .child(set_row(
                         "自动接受联网搜索",
-                        Some(div().child("开启 Run Everything 时跳过搜索类工具的审批").into_any_element()),
+                        Some(
+                            div()
+                                .child("开启 Run Everything 时跳过搜索类工具的审批")
+                                .into_any_element(),
+                        ),
                         Some(toggle(self, "moonlit:s:autoAcceptSearch", true, cx)),
                         false,
                         true, // `.dim`
@@ -1941,82 +2214,94 @@ impl AgentIdeApp {
     fn set_page_tab(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.t;
         let ignored = self.settings_pinput("moonlit:s:ignored", "例如 *.md, **/generated/**", cx);
-        let toggle =
-            |this: &mut Self, key: &'static str, default: bool, cx: &mut Context<Self>| -> AnyElement {
-                set_toggle(this.s_bool(key, default), &t, move |app, _| app.s_flip(key, default), cx)
-                    .into_any_element()
-            };
-
-        div()
-            .flex()
-            .flex_col()
-            .child(set_h1("自动补全", &t))
-            .child(
-                set_card(&t)
-                    .child(srow(
-                        "月夜 Tab",
-                        "基于近期编辑的上下文感知多行建议",
-                        Some(toggle(self, "moonlit:s:tab", true, cx)),
-                        false,
-                        &t,
-                    ))
-                    .child(set_row(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(4.))
-                            .child("部分接受")
-                            .child(icon("info", 10., t.text_3)),
-                        Some(div().child("通过 Ctrl+→ 接受建议的下一个词").into_any_element()),
-                        Some(toggle(self, "moonlit:s:partial", false, cx)),
-                        false,
-                        false,
-                        &t,
-                    ))
-                    .child(srow(
-                        "注释中的建议",
-                        "在注释区域也允许 Tab 触发",
-                        Some(toggle(self, "moonlit:s:comments", true, cx)),
-                        false,
-                        &t,
-                    ))
-                    .child(srow(
-                        "纯空白建议",
-                        "允许仅修改换行与缩进的建议",
-                        Some(toggle(self, "moonlit:s:whitespace", false, cx)),
-                        false,
-                        &t,
-                    ))
-                    .child(srow(
-                        "自动 Import",
-                        "为 TypeScript 自动引入所需模块",
-                        Some(toggle(self, "moonlit:s:imports", true, cx)),
-                        false,
-                        &t,
-                    ))
-                    .child(set_row(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.))
-                            .child("Python 自动 Import")
-                            .child(set_badge("BETA", &t)),
-                        Some(div().child("为 Python 启用自动 Import，仍处于 Beta 阶段").into_any_element()),
-                        Some(toggle(self, "moonlit:s:pyImports", false, cx)),
-                        false,
-                        false,
-                        &t,
-                    ))
-                    .child(srow(
-                        "忽略的文件",
-                        "Glob 模式：匹配的文件不会被建议",
-                        Some(set_input_box(ignored, 200., &t).into_any_element()),
-                        true,
-                        &t,
-                    )),
+        let toggle = |this: &mut Self,
+                      key: &'static str,
+                      default: bool,
+                      cx: &mut Context<Self>|
+         -> AnyElement {
+            set_toggle(
+                this.s_bool(key, default),
+                &t,
+                move |app, _| app.s_flip(key, default),
+                cx,
             )
+            .into_any_element()
+        };
+
+        div().flex().flex_col().child(set_h1("自动补全", &t)).child(
+            set_card(&t)
+                .child(srow(
+                    "月夜 Tab",
+                    "基于近期编辑的上下文感知多行建议",
+                    Some(toggle(self, "moonlit:s:tab", true, cx)),
+                    false,
+                    &t,
+                ))
+                .child(set_row(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(4.))
+                        .child("部分接受")
+                        .child(icon("info", 10., t.text_3)),
+                    Some(
+                        div()
+                            .child("通过 Ctrl+→ 接受建议的下一个词")
+                            .into_any_element(),
+                    ),
+                    Some(toggle(self, "moonlit:s:partial", false, cx)),
+                    false,
+                    false,
+                    &t,
+                ))
+                .child(srow(
+                    "注释中的建议",
+                    "在注释区域也允许 Tab 触发",
+                    Some(toggle(self, "moonlit:s:comments", true, cx)),
+                    false,
+                    &t,
+                ))
+                .child(srow(
+                    "纯空白建议",
+                    "允许仅修改换行与缩进的建议",
+                    Some(toggle(self, "moonlit:s:whitespace", false, cx)),
+                    false,
+                    &t,
+                ))
+                .child(srow(
+                    "自动 Import",
+                    "为 TypeScript 自动引入所需模块",
+                    Some(toggle(self, "moonlit:s:imports", true, cx)),
+                    false,
+                    &t,
+                ))
+                .child(set_row(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.))
+                        .child("Python 自动 Import")
+                        .child(set_badge("BETA", &t)),
+                    Some(
+                        div()
+                            .child("为 Python 启用自动 Import，仍处于 Beta 阶段")
+                            .into_any_element(),
+                    ),
+                    Some(toggle(self, "moonlit:s:pyImports", false, cx)),
+                    false,
+                    false,
+                    &t,
+                ))
+                .child(srow(
+                    "忽略的文件",
+                    "Glob 模式：匹配的文件不会被建议",
+                    Some(set_input_box(ignored, 200., &t).into_any_element()),
+                    true,
+                    &t,
+                )),
+        )
     }
 
     // ---- 模型 (渠道 + Tavily) -------------------------------------------------------
@@ -2100,14 +2385,23 @@ impl AgentIdeApp {
         }
         let count = channels.len();
         for (i, ch) in channels.into_iter().enumerate() {
-            let name = ch.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = ch
+                .get("label")
+                .or_else(|| ch.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let provider_label = ch
                 .get("providerLabel")
+                .or_else(|| ch.get("providerType"))
                 .or_else(|| ch.get("provider"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("custom")
                 .to_string();
-            let key_set = ch.get("apiKeySet").and_then(|v| v.as_bool()).unwrap_or(false);
+            let key_set = ch
+                .get("apiKeySet")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let enabled = ch.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
             let models: Vec<String> = ch
                 .get("models")
@@ -2123,7 +2417,11 @@ impl AgentIdeApp {
             } else {
                 format!("{} 个模型 · {}", models.len(), models.join(", "))
             };
-            let id = ch.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = ch
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let ch_for_toggle = ch.clone();
             let ch_for_edit = ch.clone();
             let id_for_delete = id.clone();
@@ -2135,7 +2433,11 @@ impl AgentIdeApp {
                 .child(name)
                 .child(mini_chip(provider_label, t.text_2))
                 .child(mini_chip(
-                    if key_set { "已配置 Key".into() } else { "未配置 Key".into() },
+                    if key_set {
+                        "已配置 Key".into()
+                    } else {
+                        "未配置 Key".into()
+                    },
                     if key_set { t.accent } else { t.text_3 },
                 ));
             let controls = div()
@@ -2143,15 +2445,24 @@ impl AgentIdeApp {
                 .flex_row()
                 .items_center()
                 .gap(px(8.))
-                .child(set_toggle(enabled, &t, move |this, cx| {
-                    this.toggle_channel_enabled(ch_for_toggle.clone(), cx)
-                }, cx))
-                .child(row_ibtn("pencil", &t, move |this, cx| {
-                    this.edit_channel(ch_for_edit.clone(), cx)
-                }, cx))
-                .child(row_ibtn("trash-2", &t, move |this, cx| {
-                    this.remove_channel(id_for_delete.clone(), cx)
-                }, cx));
+                .child(set_toggle(
+                    enabled,
+                    &t,
+                    move |this, cx| this.toggle_channel_enabled(ch_for_toggle.clone(), cx),
+                    cx,
+                ))
+                .child(row_ibtn(
+                    "pencil",
+                    &t,
+                    move |this, cx| this.edit_channel(ch_for_edit.clone(), cx),
+                    cx,
+                ))
+                .child(row_ibtn(
+                    "trash-2",
+                    &t,
+                    move |this, cx| this.remove_channel(id_for_delete.clone(), cx),
+                    cx,
+                ));
             card = card.child(set_row(
                 title,
                 Some(
@@ -2211,12 +2522,19 @@ impl AgentIdeApp {
 
         // Provider options: backend list, else fallback table.
         let provider_options: Vec<(String, String)> = if self.provider_types.is_empty() {
-            PROVIDER_FALLBACK.iter().map(|(p, l, _)| (p.to_string(), l.to_string())).collect()
+            PROVIDER_FALLBACK
+                .iter()
+                .map(|(p, l, _)| (p.to_string(), l.to_string()))
+                .collect()
         } else {
             self.provider_types
                 .iter()
                 .filter_map(|p| {
-                    let id = p.get("provider")?.as_str()?.to_string();
+                    let id = p
+                        .get("id")
+                        .or_else(|| p.get("provider"))?
+                        .as_str()?
+                        .to_string();
                     let label = p
                         .get("label")
                         .and_then(|v| v.as_str())
@@ -2227,14 +2545,23 @@ impl AgentIdeApp {
                 .collect()
         };
         let provider_defaults: Vec<(String, String)> = if self.provider_types.is_empty() {
-            PROVIDER_FALLBACK.iter().map(|(p, _, u)| (p.to_string(), u.to_string())).collect()
+            PROVIDER_FALLBACK
+                .iter()
+                .map(|(p, _, u)| (p.to_string(), u.to_string()))
+                .collect()
         } else {
             self.provider_types
                 .iter()
                 .filter_map(|p| {
                     Some((
-                        p.get("provider")?.as_str()?.to_string(),
-                        p.get("defaultBaseUrl").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        p.get("id")
+                            .or_else(|| p.get("provider"))?
+                            .as_str()?
+                            .to_string(),
+                        p.get("defaultBaseUrl")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                     ))
                 })
                 .collect()
@@ -2259,7 +2586,8 @@ impl AgentIdeApp {
         }
         for (i, m_enabled) in model_enabled.iter().enumerate() {
             let m_enabled = *m_enabled;
-            let id_input = self.settings_input(&format!("ch:m{i}:id"), "模型 ID（如 deepseek-chat）", cx);
+            let id_input =
+                self.settings_input(&format!("ch:m{i}:id"), "模型 ID（如 deepseek-chat）", cx);
             let mname_input = self.settings_input(&format!("ch:m{i}:name"), "显示名（可选）", cx);
             model_rows = model_rows.child(
                 div()
@@ -2270,16 +2598,24 @@ impl AgentIdeApp {
                     .gap(px(6.))
                     .child(set_input_box(id_input, 0., &t).flex_1())
                     .child(set_input_box(mname_input, 0., &t).flex_1())
-                    .child(set_toggle(m_enabled, &t, move |this, _| {
-                        if let Some(draft) = &mut this.channel_draft {
-                            if let Some(flag) = draft.model_enabled.get_mut(i) {
-                                *flag = !*flag;
+                    .child(set_toggle(
+                        m_enabled,
+                        &t,
+                        move |this, _| {
+                            if let Some(draft) = &mut this.channel_draft {
+                                if let Some(flag) = draft.model_enabled.get_mut(i) {
+                                    *flag = !*flag;
+                                }
                             }
-                        }
-                    }, cx))
-                    .child(row_ibtn("trash-2", &t, move |this, cx| {
-                        this.remove_model_row(i, cx)
-                    }, cx)),
+                        },
+                        cx,
+                    ))
+                    .child(row_ibtn(
+                        "trash-2",
+                        &t,
+                        move |this, cx| this.remove_model_row(i, cx),
+                        cx,
+                    )),
             );
         }
 
@@ -2310,7 +2646,10 @@ impl AgentIdeApp {
                                 .as_ref()
                                 .map(|d| d.provider.clone())
                                 .and_then(|p| {
-                                    provider_defaults.iter().find(|(id, _)| *id == p).map(|(_, u)| u.clone())
+                                    provider_defaults
+                                        .iter()
+                                        .find(|(id, _)| *id == p)
+                                        .map(|(_, u)| u.clone())
                                 })
                                 .unwrap_or_default();
                             let new_default = provider_defaults
@@ -2368,7 +2707,11 @@ impl AgentIdeApp {
                         {
                             key_input.update(cx, |i, cx| {
                                 i.set_placeholder(
-                                    if api_key_set { "已配置（输入新 Key 以覆盖）" } else { "sk-..." },
+                                    if api_key_set {
+                                        "已配置（输入新 Key 以覆盖）"
+                                    } else {
+                                        "sk-..."
+                                    },
                                     cx,
                                 )
                             });
@@ -2387,11 +2730,16 @@ impl AgentIdeApp {
                 "启用渠道",
                 "关闭后该渠道的模型不会用于 Agent",
                 Some(
-                    set_toggle(enabled, &t, |this, _| {
-                        if let Some(draft) = &mut this.channel_draft {
-                            draft.enabled = !draft.enabled;
-                        }
-                    }, cx)
+                    set_toggle(
+                        enabled,
+                        &t,
+                        |this, _| {
+                            if let Some(draft) = &mut this.channel_draft {
+                                draft.enabled = !draft.enabled;
+                            }
+                        },
+                        cx,
+                    )
                     .into_any_element(),
                 ),
                 model_enabled.is_empty(),
@@ -2413,15 +2761,23 @@ impl AgentIdeApp {
                             .flex_row()
                             .items_center()
                             .justify_between()
-                            .child(div().text_size(px(12.)).text_color(t.text_2).child("模型列表"))
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(t.text_2)
+                                    .child("模型列表"),
+                            )
                             .child(
                                 div()
                                     .flex()
                                     .flex_row()
                                     .gap(px(6.))
                                     .child({
-                                        let label =
-                                            if fetching { "获取中…" } else { "从供应商获取" };
+                                        let label = if fetching {
+                                            "获取中…"
+                                        } else {
+                                            "从供应商获取"
+                                        };
                                         div()
                                             .h(px(26.))
                                             .px(px(10.))
@@ -2440,9 +2796,11 @@ impl AgentIdeApp {
                                             .child(label)
                                             .on_mouse_down(
                                                 MouseButton::Left,
-                                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
-                                                    this.fetch_channel_models(cx)
-                                                }),
+                                                cx.listener(
+                                                    |this, _ev: &MouseDownEvent, _w, cx| {
+                                                        this.fetch_channel_models(cx)
+                                                    },
+                                                ),
                                             )
                                     })
                                     .child(
@@ -2464,9 +2822,11 @@ impl AgentIdeApp {
                                             .child("添加模型")
                                             .on_mouse_down(
                                                 MouseButton::Left,
-                                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
-                                                    this.add_model_row(cx)
-                                                }),
+                                                cx.listener(
+                                                    |this, _ev: &MouseDownEvent, _w, cx| {
+                                                        this.add_model_row(cx)
+                                                    },
+                                                ),
                                             ),
                                     ),
                             ),
@@ -2484,9 +2844,19 @@ impl AgentIdeApp {
                     .flex_row()
                     .justify_end()
                     .gap(px(8.))
-                    .child(sm_btn("取消", false, &t, |this, _| this.channel_draft = None, cx))
                     .child(sm_btn(
-                        if saving { "保存中…" } else { "保存渠道" },
+                        "取消",
+                        false,
+                        &t,
+                        |this, _| this.channel_draft = None,
+                        cx,
+                    ))
+                    .child(sm_btn(
+                        if saving {
+                            "保存中…"
+                        } else {
+                            "保存渠道"
+                        },
                         true,
                         &t,
                         |this, cx| {
@@ -2522,23 +2892,35 @@ impl AgentIdeApp {
             Some(d) => {
                 key_input.update(cx, |i, cx| {
                     i.set_placeholder(
-                        if d.api_key_set { "已配置（输入新 Key 以覆盖）" } else { "tvly-..." },
+                        if d.api_key_set {
+                            "已配置（输入新 Key 以覆盖）"
+                        } else {
+                            "tvly-..."
+                        },
                         cx,
                     )
                 });
                 let opts = |values: &[&str]| -> Vec<(String, String)> {
-                    values.iter().map(|v| (v.to_string(), v.to_string())).collect()
+                    values
+                        .iter()
+                        .map(|v| (v.to_string(), v.to_string()))
+                        .collect()
                 };
                 card = card
                     .child(srow(
                         "启用 Tavily",
                         "开启后，联网搜索优先使用这里保存的 Tavily 配置",
                         Some(
-                            set_toggle(d.enabled, &t, |this, _| {
-                                if let Some(d) = &mut this.tavily {
-                                    d.enabled = !d.enabled;
-                                }
-                            }, cx)
+                            set_toggle(
+                                d.enabled,
+                                &t,
+                                |this, _| {
+                                    if let Some(d) = &mut this.tavily {
+                                        d.enabled = !d.enabled;
+                                    }
+                                },
+                                cx,
+                            )
                             .into_any_element(),
                         ),
                         false,
@@ -2677,31 +3059,35 @@ impl AgentIdeApp {
             .flex()
             .flex_col()
             .child(
-                div()
-                    .mb(px(8.))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .child(
-                        div()
-                            .text_size(px(15.))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Tavily 搜索配置"),
-                    ),
+                div().mb(px(8.)).flex().flex_row().items_center().child(
+                    div()
+                        .text_size(px(15.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("Tavily 搜索配置"),
+                ),
             )
             .child(card)
             .child(
-                div().mt(px(8.)).flex().flex_row().justify_end().child(sm_btn(
-                    if saving { "保存中…" } else { "保存 Tavily 配置" },
-                    true,
-                    &t,
-                    move |this, cx| {
-                        if loaded && !this.tavily_saving {
-                            this.save_tavily(cx);
-                        }
-                    },
-                    cx,
-                )),
+                div()
+                    .mt(px(8.))
+                    .flex()
+                    .flex_row()
+                    .justify_end()
+                    .child(sm_btn(
+                        if saving {
+                            "保存中…"
+                        } else {
+                            "保存 Tavily 配置"
+                        },
+                        true,
+                        &t,
+                        move |this, cx| {
+                            if loaded && !this.tavily_saving {
+                                this.save_tavily(cx);
+                            }
+                        },
+                        cx,
+                    )),
             )
     }
 
@@ -2737,7 +3123,11 @@ impl AgentIdeApp {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
                 .unwrap_or("（无描述）");
-            match it.get("tools").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            match it
+                .get("tools")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
                 Some(tools) => format!("{desc} · 工具：{tools}"),
                 None => desc.to_string(),
             }
@@ -2762,27 +3152,30 @@ impl AgentIdeApp {
                     .text_color(t.text_3)
                     .child("为 Agent 提供领域知识与可复用工作流"),
             )
+            .child(div().mb(px(14.)).flex().flex_row().child(seg_wrap(
+                &[("user", "我的"), ("team", "团队")],
+                &scope,
+                &t,
+                |this, id, _| this.s_set_str("moonlit:s:rulesScope", id),
+                cx,
+            )))
             .child(
-                div().mb(px(14.)).flex().flex_row().child(seg_wrap(
-                    &[("user", "我的"), ("team", "团队")],
-                    &scope,
+                set_card(&t).child(srow(
+                    "包含第三方插件、技能与配置",
+                    "自动从其他工具导入 agent 配置",
+                    Some(
+                        set_toggle(
+                            self.s_bool("moonlit:s:thirdParty", true),
+                            &t,
+                            |this, _| this.s_flip("moonlit:s:thirdParty", true),
+                            cx,
+                        )
+                        .into_any_element(),
+                    ),
+                    true,
                     &t,
-                    |this, id, _| this.s_set_str("moonlit:s:rulesScope", id),
-                    cx,
                 )),
             )
-            .child(set_card(&t).child(srow(
-                "包含第三方插件、技能与配置",
-                "自动从其他工具导入 agent 配置",
-                Some(
-                    set_toggle(self.s_bool("moonlit:s:thirdParty", true), &t, |this, _| {
-                        this.s_flip("moonlit:s:thirdParty", true)
-                    }, cx)
-                    .into_any_element(),
-                ),
-                true,
-                &t,
-            )))
             .child(self.crud_section(
                 format!("moonlit:rules:{scope}:rules"),
                 "规则",
@@ -2839,9 +3232,13 @@ impl AgentIdeApp {
         let name_key = fields[0].key;
 
         let key_for_add = storage_key.clone();
-        let head = set_list_head(title, desc, &t, move |this, cx| {
-            this.open_crud(key_for_add.clone(), title, add_label, fields, None, cx)
-        }, cx);
+        let head = set_list_head(
+            title,
+            desc,
+            &t,
+            move |this, cx| this.open_crud(key_for_add.clone(), title, add_label, fields, None, cx),
+            cx,
+        );
 
         let mut card = set_card(&t);
         if items.is_empty() {
@@ -2867,9 +3264,22 @@ impl AgentIdeApp {
                             .text_color(t.text_3)
                             .child(format!("点击「{add_label}」创建第一条。")),
                     )
-                    .child(div().mt(px(6.)).child(sm_btn(add_label, false, &t, move |this, cx| {
-                        this.open_crud(key_for_empty.clone(), title, add_label, fields, None, cx)
-                    }, cx))),
+                    .child(div().mt(px(6.)).child(sm_btn(
+                        add_label,
+                        false,
+                        &t,
+                        move |this, cx| {
+                            this.open_crud(
+                                key_for_empty.clone(),
+                                title,
+                                add_label,
+                                fields,
+                                None,
+                                cx,
+                            )
+                        },
+                        cx,
+                    ))),
             );
         }
         let count = items.len();
@@ -2880,7 +3290,11 @@ impl AgentIdeApp {
                 .filter(|s| !s.is_empty())
                 .unwrap_or("（未命名）")
                 .to_string();
-            let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let id = item
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let key_for_edit = storage_key.clone();
             let key_for_remove = storage_key.clone();
             let item_for_edit = item.clone();
@@ -2889,19 +3303,27 @@ impl AgentIdeApp {
                 .flex()
                 .flex_row()
                 .gap(px(6.))
-                .child(row_ibtn("pencil", &t, move |this, cx| {
-                    this.open_crud(
-                        key_for_edit.clone(),
-                        title,
-                        add_label,
-                        fields,
-                        Some(&item_for_edit),
-                        cx,
-                    )
-                }, cx))
-                .child(row_ibtn("trash-2", &t, move |this, cx| {
-                    this.remove_crud_item(&key_for_remove, &id_for_remove, cx)
-                }, cx));
+                .child(row_ibtn(
+                    "pencil",
+                    &t,
+                    move |this, cx| {
+                        this.open_crud(
+                            key_for_edit.clone(),
+                            title,
+                            add_label,
+                            fields,
+                            Some(&item_for_edit),
+                            cx,
+                        )
+                    },
+                    cx,
+                ))
+                .child(row_ibtn(
+                    "trash-2",
+                    &t,
+                    move |this, cx| this.remove_crud_item(&key_for_remove, &id_for_remove, cx),
+                    cx,
+                ));
             card = card.child(set_row(
                 name,
                 Some(div().child(summary(&item)).into_any_element()),
@@ -2957,7 +3379,11 @@ impl AgentIdeApp {
         }
         let count = skills.len();
         for (i, item) in skills.into_iter().enumerate() {
-            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let scope_label = match item.get("scope").and_then(|v| v.as_str()) {
                 Some("workspace") => "工作区".to_string(),
                 Some("user") => "用户".to_string(),
@@ -3025,7 +3451,9 @@ impl AgentIdeApp {
                     .unwrap_or_else(|| "加载中…".to_string());
                 row = row.child(
                     div()
-                        .id(gpui::ElementId::Name(format!("skill-preview-{name}").into()))
+                        .id(gpui::ElementId::Name(
+                            format!("skill-preview-{name}").into(),
+                        ))
                         .max_h(px(320.))
                         .overflow_y_scroll()
                         .p(px(12.))
@@ -3057,12 +3485,121 @@ impl AgentIdeApp {
 
     // ---- 工具与 MCP -----------------------------------------------------------------
 
+    fn set_page_memory(&mut self, cx: &mut Context<Self>) -> Div {
+        let t = self.t;
+        if !self.memories_loaded {
+            self.load_memories();
+        }
+        let mut page = div().flex().flex_col().child(set_h1("长期记忆", &t)).child(
+            div()
+                .mb(px(8.))
+                .text_size(px(12.5))
+                .text_color(t.text_3)
+                .child(
+                    "代理跨会话保存的偏好、事实与约定，会按相关性注入后续对话。删除后不再被使用。",
+                ),
+        );
+
+        if self.memories.is_empty() {
+            return page.child(
+                set_card(&t).child(
+                    div()
+                        .p(px(16.))
+                        .text_size(px(12.5))
+                        .text_color(t.text_4)
+                        .child(if self.memories_loaded {
+                            "暂无记忆。代理在对话中判断有价值时会自动写入。"
+                        } else {
+                            "加载中…"
+                        }),
+                ),
+            );
+        }
+
+        let total = self.memories.len();
+        let mut card = set_card(&t);
+        for (i, m) in self.memories.iter().enumerate() {
+            let id = m
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let content = m
+                .get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let kind = m
+                .get("kind")
+                .and_then(|v| v.as_str())
+                .unwrap_or("fact")
+                .to_string();
+            let scope = m.get("scope").and_then(|v| v.as_str()).unwrap_or("global");
+            let scope_label = if scope == "global" {
+                "global"
+            } else if scope.starts_with("session:") {
+                "session"
+            } else {
+                "workspace"
+            };
+            let last = i + 1 == total;
+            card = card.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(10.))
+                    .px(px(16.))
+                    .py(px(12.))
+                    .when(!last, |d| d.border_b_1().border_color(t.line))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(div().text_size(px(13.)).text_color(t.text).child(content))
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(t.text_4)
+                                    .child(format!("{kind} · {scope_label}")),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .w(px(24.))
+                            .h(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(t.bg_hover))
+                            .child(icon("trash-2", 13., t.text_3))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                                    this.delete_memory_entry(id.clone(), cx);
+                                }),
+                            ),
+                    ),
+            );
+        }
+        page = page.child(set_section_label(format!("共 {total} 条"), &t));
+        page.child(card)
+    }
+
     fn set_page_tools(&mut self, cx: &mut Context<Self>) -> Div {
         let t = self.t;
         let section = self.s_str("moonlit:s:toolsSection", "home");
 
         fn mcp_summary(it: &serde_json::Value) -> String {
-            let transport = it.get("transport").and_then(|v| v.as_str()).unwrap_or("stdio");
+            let transport = it
+                .get("transport")
+                .and_then(|v| v.as_str())
+                .unwrap_or("stdio");
             if transport == "url" {
                 format!(
                     "URL · {}",
@@ -3086,29 +3623,38 @@ impl AgentIdeApp {
             .flex()
             .flex_col()
             .child(set_h1("工具与 MCP", &t))
+            .child(div().mb(px(14.)).flex().flex_row().child(seg_wrap(
+                &[("home", "本地"), ("cloud", "云端")],
+                &section,
+                &t,
+                |this, id, _| this.s_set_str("moonlit:s:toolsSection", id),
+                cx,
+            )))
+            .child(set_section_label("执行权限", &t))
             .child(
-                div().mb(px(14.)).flex().flex_row().child(seg_wrap(
-                    &[("home", "本地"), ("cloud", "云端")],
-                    &section,
+                set_card(&t).child(srow(
+                    "自动执行低风险工具",
+                    "沙箱内可写 allowlist 范围内的命令自动通过；其余仍需手动批准。",
+                    Some(
+                        set_toggle(
+                            self.state.settings.auto_approve,
+                            &t,
+                            |this, _| {
+                                this.state.settings.auto_approve =
+                                    !this.state.settings.auto_approve;
+                                this.s_set_bool(
+                                    "moonlit:autoApprove",
+                                    this.state.settings.auto_approve,
+                                );
+                            },
+                            cx,
+                        )
+                        .into_any_element(),
+                    ),
+                    true,
                     &t,
-                    |this, id, _| this.s_set_str("moonlit:s:toolsSection", id),
-                    cx,
                 )),
             )
-            .child(set_section_label("执行权限", &t))
-            .child(set_card(&t).child(srow(
-                "自动执行低风险工具",
-                "沙箱内可写 allowlist 范围内的命令自动通过；其余仍需手动批准。",
-                Some(
-                    set_toggle(self.state.settings.auto_approve, &t, |this, _| {
-                        this.state.settings.auto_approve = !this.state.settings.auto_approve;
-                        this.s_set_bool("moonlit:autoApprove", this.state.settings.auto_approve);
-                    }, cx)
-                    .into_any_element(),
-                ),
-                true,
-                &t,
-            )))
             .child(set_section_label("浏览器", &t))
             .child(
                 set_card(&t)
@@ -3138,9 +3684,12 @@ impl AgentIdeApp {
                         "在 Browser Tab 显示 Localhost 链接",
                         "自动在 Browser Tab 中打开 localhost 链接",
                         Some(
-                            set_toggle(self.s_bool("moonlit:s:showLocalhost", true), &t, |this, _| {
-                                this.s_flip("moonlit:s:showLocalhost", true)
-                            }, cx)
+                            set_toggle(
+                                self.s_bool("moonlit:s:showLocalhost", true),
+                                &t,
+                                |this, _| this.s_flip("moonlit:s:showLocalhost", true),
+                                cx,
+                            )
                             .into_any_element(),
                         ),
                         false,
@@ -3150,9 +3699,12 @@ impl AgentIdeApp {
                         "在 Browser Tab 打开 Web 链接",
                         "自动在 Browser Tab 打开 http/https 链接",
                         Some(
-                            set_toggle(self.s_bool("moonlit:s:openWeb", false), &t, |this, _| {
-                                this.s_flip("moonlit:s:openWeb", false)
-                            }, cx)
+                            set_toggle(
+                                self.s_bool("moonlit:s:openWeb", false),
+                                &t,
+                                |this, _| this.s_flip("moonlit:s:openWeb", false),
+                                cx,
+                            )
                             .into_any_element(),
                         ),
                         true,
@@ -3238,7 +3790,10 @@ impl AgentIdeApp {
                     set_select(
                         &format!("crud:{key}"),
                         value,
-                        options.iter().map(|(v, l)| (v.to_string(), l.to_string())).collect(),
+                        options
+                            .iter()
+                            .map(|(v, l)| (v.to_string(), l.to_string()))
+                            .collect(),
                         &t,
                         self,
                         move |this, v, _| {
@@ -3259,7 +3814,14 @@ impl AgentIdeApp {
                     box_.into_any_element()
                 }
             };
-            body = body.child(div().flex().flex_col().gap(px(5.)).child(label_row).child(control));
+            body = body.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(5.))
+                    .child(label_row)
+                    .child(control),
+            );
         }
 
         div()
@@ -3314,7 +3876,13 @@ impl AgentIdeApp {
                             )
                             .child(row_ibtn("x", &t, |this, _| this.crud_modal = None, cx)),
                     )
-                    .child(div().id("crud-modal-body").flex_1().overflow_y_scroll().child(body))
+                    .child(
+                        div()
+                            .id("crud-modal-body")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .child(body),
+                    )
                     // footer 取消 / 保存
                     .child(
                         div()
@@ -3326,7 +3894,13 @@ impl AgentIdeApp {
                             .flex_row()
                             .justify_end()
                             .gap(px(8.))
-                            .child(sm_btn("取消", false, &t, |this, _| this.crud_modal = None, cx))
+                            .child(sm_btn(
+                                "取消",
+                                false,
+                                &t,
+                                |this, _| this.crud_modal = None,
+                                cx,
+                            ))
                             .child(sm_btn("保存", true, &t, |this, cx| this.save_crud(cx), cx)),
                     ),
             )
@@ -3347,4 +3921,3 @@ fn set_badge_str(text: impl Into<SharedString>, t: &Tokens) -> Div {
         .text_color(t.accent)
         .child(text.into())
 }
-

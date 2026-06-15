@@ -5,10 +5,10 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::contracts::models::{new_id, ToolCall};
-use crate::contracts::{ApiError, ApiResult};
-use crate::provider::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent, Usage};
-use crate::provider::LLMProvider;
+use crate::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent, Usage};
+use crate::LLMProvider;
+use agent_protocol::models::{new_id, ToolCall};
+use agent_protocol::{ApiError, ApiResult};
 
 pub struct GoogleProvider {
     name: String,
@@ -242,6 +242,10 @@ fn parse_response(v: &Value, provider: &str, model: &str) -> ProviderResponse {
             prompt_tokens: prompt,
             completion_tokens: completion,
             total_tokens: total,
+            cache_read_tokens: usage_meta
+                .and_then(|u| u.get("cachedContentTokenCount"))
+                .and_then(|n| n.as_u64())
+                .unwrap_or(0) as u32,
         },
         provider: provider.to_string(),
         model: model.to_string(),

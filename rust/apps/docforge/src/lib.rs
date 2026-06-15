@@ -2,8 +2,8 @@ pub mod app;
 
 use moonlit_compile::{compile_to_buffer, export_to_file};
 use moonlit_doccore::{
-    DocCore, DocCoreOptions, DocIR, DocType, ExportFormat, NewWordBlock, PartialGeo, Result as DocResult,
-    StyleInput, WordBlockType,
+    DocCore, DocCoreOptions, DocIR, DocType, ExportFormat, NewWordBlock, PartialGeo,
+    Result as DocResult, StyleInput, WordBlockType,
 };
 use moonlit_preview::{raster_preview, render_l1, L1Preview, RasterRequest, RasterResult};
 use serde::{Deserialize, Serialize};
@@ -40,7 +40,12 @@ impl WordEditorState {
         Ok(id)
     }
 
-    pub fn insert_heading(&mut self, after_id: Option<&str>, level: u8, text: &str) -> DocResult<String> {
+    pub fn insert_heading(
+        &mut self,
+        after_id: Option<&str>,
+        level: u8,
+        text: &str,
+    ) -> DocResult<String> {
         let id = self.core.insert_block(
             after_id,
             NewWordBlock {
@@ -106,7 +111,8 @@ impl PptEditorState {
     }
 
     pub fn edit_selected_text(&self, text: &str) -> DocResult<()> {
-        let (Some(slide_id), Some(el_id)) = (&self.selected_slide_id, &self.selected_element_id) else {
+        let (Some(slide_id), Some(el_id)) = (&self.selected_slide_id, &self.selected_element_id)
+        else {
             return Ok(());
         };
         self.core.edit_element(
@@ -117,7 +123,8 @@ impl PptEditorState {
     }
 
     pub fn move_selected(&self, dx: f64, dy: f64) -> DocResult<()> {
-        let (Some(slide_id), Some(el_id)) = (&self.selected_slide_id, &self.selected_element_id) else {
+        let (Some(slide_id), Some(el_id)) = (&self.selected_slide_id, &self.selected_element_id)
+        else {
             return Ok(());
         };
         let Some(current) = find_element_geo(&self.core.read_document(), slide_id, el_id) else {
@@ -151,7 +158,11 @@ pub struct ExportResult {
 pub struct ExportService;
 
 impl ExportService {
-    pub fn export(ir: &DocIR, format: ExportFormat, out_path: impl AsRef<Path>) -> anyhow::Result<ExportResult> {
+    pub fn export(
+        ir: &DocIR,
+        format: ExportFormat,
+        out_path: impl AsRef<Path>,
+    ) -> anyhow::Result<ExportResult> {
         let bytes = compile_to_buffer(ir, format, None)?.len();
         let path = export_to_file(ir, format, out_path)?;
         Ok(ExportResult { path, bytes })
@@ -248,7 +259,8 @@ mod tests {
         editor.insert_paragraph(None, "hello").unwrap();
         let dir = std::env::temp_dir().join(format!("moonlit-docforge-{}", std::process::id()));
         let out = dir.join("demo.docx");
-        let result = ExportService::export(&editor.core.read_document(), ExportFormat::Docx, &out).unwrap();
+        let result =
+            ExportService::export(&editor.core.read_document(), ExportFormat::Docx, &out).unwrap();
         assert!(result.path.exists());
         assert!(result.bytes > 0);
     }
@@ -256,7 +268,8 @@ mod tests {
     #[test]
     fn raster_preview_writes_artifact() {
         let state = DocForgeState::default();
-        let dir = std::env::temp_dir().join(format!("moonlit-docforge-preview-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("moonlit-docforge-preview-{}", std::process::id()));
         let result = ExportService::preview_raster(state.word.core.read_document(), dir).unwrap();
         assert!(result.artifact_path.exists());
     }

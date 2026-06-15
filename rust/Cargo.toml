@@ -57,6 +57,7 @@ moonlit-compile = { path = "crates/moonlit-compile" }
 moonlit-preview = { path = "crates/moonlit-preview" }
 moonlit-sync = { path = "crates/moonlit-sync" }
 moonlit-uikit = { path = "crates/moonlit-uikit" }
+moonlit-docforge = { path = "apps/docforge" }
 
 [profile.release]
 opt-level = 3

@@ -1,4 +1,8 @@
-# Moonlit Document Compiler Backend
+# Moonlit Document Compiler Backend（Python 参考实现）
+
+> **注意**：默认运行栈已切换为 Rust + Go（`../backend-rs` + `../gateway-go`，
+> 见仓库根目录 `docker-compose.yml` 与 `scripts/start-stack.ps1`）。
+> 本目录仅作为行为参考实现保留，不再是默认入口。
 
 轻量后端，提供文档处理与 AI 辅助编译能力（FastAPI + WebSocket）。
 

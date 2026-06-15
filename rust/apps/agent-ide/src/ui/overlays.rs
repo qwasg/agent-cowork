@@ -6,8 +6,8 @@ use gpui::{div, prelude::*, px, AnimationExt, Context, MouseButton, MouseDownEve
 use moonlit_uikit::{ToastKind, FONT_SERIF};
 
 use super::icons::icon;
-use super::{kbd, sh_float, status_dot};
-use crate::app::AgentIdeApp;
+use super::{float_surface, kbd, sh_float, status_dot};
+use crate::app::{AgentIdeApp, ContextApplyTarget};
 
 impl AgentIdeApp {
     // ---- command palette -----------------------------------------------------------
@@ -66,7 +66,11 @@ impl AgentIdeApp {
         }
         if commands.is_empty() {
             list = list.child(
-                div().p(px(16.)).text_size(px(12.)).text_color(t.text_4).child("没有匹配的命令"),
+                div()
+                    .p(px(16.))
+                    .text_size(px(12.))
+                    .text_color(t.text_4)
+                    .child("没有匹配的命令"),
             );
         }
 
@@ -84,17 +88,13 @@ impl AgentIdeApp {
                 }),
             )
             .child(
-                div()
+                float_surface(&t)
                     .mt(gpui::relative(0.15))
                     .w(px(600.))
                     .h_auto()
                     .flex()
                     .flex_col()
                     .rounded(px(12.))
-                    .border_1()
-                    .border_color(t.line_strong)
-                    .bg(t.bg_panel)
-                    .shadow(sh_float())
                     .overflow_hidden()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -113,7 +113,12 @@ impl AgentIdeApp {
                             .border_b_1()
                             .border_color(t.line)
                             .child(icon("search", 14., t.text_3))
-                            .child(div().flex_1().text_size(px(14.)).child(self.palette_input.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(14.))
+                                    .child(self.palette_input.clone()),
+                            )
                             .child(kbd("Esc", &t)),
                     )
                     .child(list),
@@ -170,10 +175,22 @@ impl AgentIdeApp {
     // ---- context drawer ---------------------------------------------------------
 
     /// `ContextDrawer`: 420px fixed right (between titlebar and statusbar),
-    /// filter chips, checkable entries, footer 取消 / 应用到 Composer.
+    /// filter chips, checkable entries, footer 取消 / 应用到 Composer/编辑内容.
     pub(crate) fn render_context_drawer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.t;
         let filter = self.ctx_filter;
+        let apply_to_edit = self.context_apply_target == ContextApplyTarget::EditMessage
+            && self.editing_msg.is_some();
+        let apply_label = if apply_to_edit {
+            "应用到编辑内容"
+        } else {
+            "应用到 Composer"
+        };
+        let toast_label = if apply_to_edit {
+            "已应用到编辑内容"
+        } else {
+            "已应用到 Composer"
+        };
         let entries: Vec<(String, bool)> = self
             .state
             .workbench
@@ -183,7 +200,9 @@ impl AgentIdeApp {
             .filter(|n| match filter {
                 "ts" => n.name.ends_with(".ts") || n.name.ends_with(".tsx"),
                 "terminal" => false,
-                "image" => n.name.ends_with(".png") || n.name.ends_with(".jpg") || n.name.ends_with(".svg"),
+                "image" => {
+                    n.name.ends_with(".png") || n.name.ends_with(".jpg") || n.name.ends_with(".svg")
+                }
                 _ => true,
             })
             .map(|n| (n.path.clone(), self.ctx_selected.contains(&n.path)))
@@ -213,7 +232,7 @@ impl AgentIdeApp {
                 )
         };
 
-        div()
+        float_surface(&t)
             .absolute()
             .top(px(36.))
             .bottom(px(26.))
@@ -221,10 +240,8 @@ impl AgentIdeApp {
             .w(px(420.))
             .flex()
             .flex_col()
-            .bg(t.bg_panel)
             .border_l_1()
             .border_color(t.line_strong)
-            .shadow(sh_float())
             // head
             .child(
                 div()
@@ -243,7 +260,12 @@ impl AgentIdeApp {
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child("添加 Agent 上下文"),
                     )
-                    .child(div().text_size(px(11.)).text_color(t.text_3).child(format!("已选 {selected_count}")))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(t.text_3)
+                            .child(format!("已选 {selected_count}")),
+                    )
                     .child(
                         div()
                             .cursor_pointer()
@@ -285,7 +307,9 @@ impl AgentIdeApp {
                                 .p(px(20.))
                                 .text_size(px(12.))
                                 .text_color(t.text_3)
-                                .child("暂无可选上下文。打开文件或同步工作区后，这里会出现可勾选条目。"),
+                                .child(
+                                "暂无可选上下文。打开文件或同步工作区后，这里会出现可勾选条目。",
+                            ),
                         )
                     })
                     .children(entries.into_iter().map(|(path, checked)| {
@@ -320,7 +344,14 @@ impl AgentIdeApp {
                                     .into_any_element()
                             })
                             .child(icon("file", 12., t.text_4))
-                            .child(div().flex_1().min_w(px(0.)).truncate().text_size(px(12.)).child(path.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .text_size(px(12.))
+                                    .child(path.clone()),
+                            )
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
@@ -376,23 +407,43 @@ impl AgentIdeApp {
                             .text_color(gpui::rgb(0xffffff))
                             .cursor_pointer()
                             .hover(move |s| s.bg(t.accent_soft))
-                            .child("应用到 Composer")
+                            .child(apply_label)
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
-                                    let tokens: Vec<String> = this
-                                        .ctx_selected
-                                        .iter()
-                                        .map(|p| format!("@{p}"))
-                                        .collect();
+                                cx.listener(move |this, _ev: &MouseDownEvent, _w, cx| {
+                                    let tokens: Vec<String> =
+                                        this.ctx_selected.iter().map(|p| format!("@{p}")).collect();
                                     if !tokens.is_empty() {
-                                        let existing = this.composer.read(cx).text().to_string();
-                                        let new_text =
-                                            format!("{} {}", tokens.join(" "), existing).trim().to_string();
-                                        this.composer.update(cx, |c, cx| c.set_text(new_text, cx));
+                                        let target = this.context_apply_target
+                                            == ContextApplyTarget::EditMessage
+                                            && this.editing_msg.is_some();
+                                        if target {
+                                            let existing =
+                                                this.edit_input.read(cx).text().to_string();
+                                            let new_text =
+                                                format!("{} {}", tokens.join(" "), existing)
+                                                    .trim()
+                                                    .to_string();
+                                            this.edit_input
+                                                .update(cx, |c, cx| c.set_text(new_text, cx));
+                                        } else {
+                                            let existing =
+                                                this.composer.read(cx).text().to_string();
+                                            let new_text =
+                                                format!("{} {}", tokens.join(" "), existing)
+                                                    .trim()
+                                                    .to_string();
+                                            this.composer
+                                                .update(cx, |c, cx| c.set_text(new_text, cx));
+                                        }
                                     }
                                     this.context_drawer_open = false;
-                                    this.toast("已应用到 Composer", ToastKind::Success, cx);
+                                    if this.context_apply_target == ContextApplyTarget::EditMessage
+                                        && this.editing_msg.is_none()
+                                    {
+                                        this.context_apply_target = ContextApplyTarget::Composer;
+                                    }
+                                    this.toast(toast_label, ToastKind::Success, cx);
                                 }),
                             ),
                     ),
@@ -416,7 +467,11 @@ impl AgentIdeApp {
                 .px(px(10.))
                 .py(px(6.))
                 .border_b_2()
-                .border_color(if is_active { t.accent } else { gpui::rgba(0x00000000) })
+                .border_color(if is_active {
+                    t.accent
+                } else {
+                    gpui::rgba(0x00000000)
+                })
                 .text_size(px(12.))
                 .text_color(if is_active { t.text } else { t.text_3 })
                 .cursor_pointer()
@@ -429,7 +484,7 @@ impl AgentIdeApp {
                     }),
                 )
         };
-        div()
+        float_surface(&t)
             .absolute()
             .top(px(36.))
             .bottom(px(26.))
@@ -437,10 +492,8 @@ impl AgentIdeApp {
             .w(px(380.))
             .flex()
             .flex_col()
-            .bg(t.bg_panel)
             .border_l_1()
             .border_color(t.line_strong)
-            .shadow(sh_float())
             .child(
                 div()
                     .flex()
@@ -535,10 +588,15 @@ impl AgentIdeApp {
                 .flex_col()
                 .items_center()
                 .gap(px(2.))
-                .child(div().text_size(px(14.)).font_weight(gpui::FontWeight::SEMIBOLD).child(value))
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(value),
+                )
                 .child(div().text_size(px(10.)).text_color(t.text_4).child(label))
         };
-        div()
+        float_surface(&t)
             .absolute()
             .bottom(px(48.))
             .left(px(52.))
@@ -548,10 +606,6 @@ impl AgentIdeApp {
             .gap(px(10.))
             .p(px(14.))
             .rounded(px(10.))
-            .border_1()
-            .border_color(t.line_strong)
-            .bg(t.bg_panel)
-            .shadow(sh_float())
             .child(
                 div()
                     .flex()
@@ -576,8 +630,18 @@ impl AgentIdeApp {
                         div()
                             .flex()
                             .flex_col()
-                            .child(div().text_size(px(13.)).font_weight(gpui::FontWeight::SEMIBOLD).child("本地用户"))
-                            .child(div().text_size(px(11.)).text_color(t.text_4).child("local@moonlit")),
+                            .child(
+                                div()
+                                    .text_size(px(13.))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("本地用户"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(t.text_4)
+                                    .child("local@moonlit"),
+                            ),
                     )
                     .child(div().flex_1())
                     .child(
@@ -634,17 +698,13 @@ impl AgentIdeApp {
     pub(crate) fn render_about_modal(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.t;
         modal_overlay(t, cx, |this| this.about_open = false).child(
-            div()
+            float_surface(&t)
                 .w(px(420.))
                 .flex()
                 .flex_col()
                 .gap(px(12.))
                 .p(px(22.))
                 .rounded(px(12.))
-                .border_1()
-                .border_color(t.line_strong)
-                .bg(t.bg_panel)
-                .shadow(sh_float())
                 .child(
                     div()
                         .flex()
@@ -677,7 +737,12 @@ impl AgentIdeApp {
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child("月夜 · 文档编译助手"),
                                 )
-                                .child(div().text_size(px(11.)).text_color(t.text_4).child("v0.1.0 · GPUI Native")),
+                                .child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(t.text_4)
+                                        .child("v0.1.0 · GPUI Native"),
+                                ),
                         ),
                 )
                 .child(
@@ -710,24 +775,26 @@ impl AgentIdeApp {
                         .flex_row()
                         .items_center()
                         .gap(px(8.))
-                        .child(div().flex_1().text_size(px(12.)).text_color(t.text_2).child(label))
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_size(px(12.))
+                                .text_color(t.text_2)
+                                .child(label),
+                        )
                         .child(kbd(keys, &t)),
                 );
             }
             g
         };
         modal_overlay(t, cx, |this| this.shortcuts_open = false).child(
-            div()
+            float_surface(&t)
                 .w(px(580.))
                 .flex()
                 .flex_col()
                 .gap(px(14.))
                 .p(px(22.))
                 .rounded(px(12.))
-                .border_1()
-                .border_color(t.line_strong)
-                .bg(t.bg_panel)
-                .shadow(sh_float())
                 .child(
                     div()
                         .text_size(px(16.))
@@ -746,14 +813,15 @@ impl AgentIdeApp {
                                 .flex()
                                 .flex_col()
                                 .gap(px(12.))
-                                .child(group("通用", vec![
-                                    ("命令面板", "Ctrl+K"),
-                                    ("新建会话", "Ctrl+Shift+N"),
-                                    ("关闭浮层", "Esc"),
-                                ]))
-                                .child(group("视图", vec![
-                                    ("切换底部面板", "Ctrl+J"),
-                                ])),
+                                .child(group(
+                                    "通用",
+                                    vec![
+                                        ("命令面板", "Ctrl+K"),
+                                        ("新建会话", "Ctrl+Shift+N"),
+                                        ("关闭浮层", "Esc"),
+                                    ],
+                                ))
+                                .child(group("视图", vec![("切换底部面板", "Ctrl+J")])),
                         )
                         .child(
                             div()
@@ -761,14 +829,14 @@ impl AgentIdeApp {
                                 .flex()
                                 .flex_col()
                                 .gap(px(12.))
-                                .child(group("Composer", vec![
-                                    ("发送", "Enter"),
-                                    ("发送（设置）", "Ctrl+Enter"),
-                                ]))
-                                .child(group("编辑", vec![
-                                    ("复制 / 粘贴", "Ctrl+C / V"),
-                                    ("全选", "Ctrl+A"),
-                                ])),
+                                .child(group(
+                                    "Composer",
+                                    vec![("发送", "Enter"), ("发送（设置）", "Ctrl+Enter")],
+                                ))
+                                .child(group(
+                                    "编辑",
+                                    vec![("复制 / 粘贴", "Ctrl+C / V"), ("全选", "Ctrl+A")],
+                                )),
                         ),
                 ),
         )

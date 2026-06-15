@@ -8,7 +8,7 @@ use moonlit_core::models::DebugSession;
 use moonlit_uikit::ToastKind;
 
 use super::icons::icon;
-use super::{kbd, sec_head, sh_float, status_dot};
+use super::{float_surface, kbd, sec_head, status_dot};
 use crate::app::AgentIdeApp;
 
 impl AgentIdeApp {
@@ -65,13 +65,30 @@ impl AgentIdeApp {
                             .border_color(t.line)
                             .bg(t.bg_panel)
                             .child(icon("search", 12., t.text_3))
-                            .child(div().flex_1().text_size(px(12.)).child(self.sidebar_search.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(12.))
+                                    .child(self.sidebar_search.clone()),
+                            )
                             .child(kbd("/", &t)),
                     )
-                    .child(self.sidebar_action("sparkles", "New Agent", Some("Ctrl+Shift+N"), |this, cx| this.new_session(cx), cx))
-                    .child(self.sidebar_action("store", "Marketplace", None, |this, cx| {
-                        this.toast("Marketplace 即将上线", ToastKind::Info, cx);
-                    }, cx)),
+                    .child(self.sidebar_action(
+                        "sparkles",
+                        "New Agent",
+                        Some("Ctrl+Shift+N"),
+                        |this, cx| this.new_session(cx),
+                        cx,
+                    ))
+                    .child(self.sidebar_action(
+                        "store",
+                        "Marketplace",
+                        None,
+                        |this, cx| {
+                            this.toast("Marketplace 即将上线", ToastKind::Info, cx);
+                        },
+                        cx,
+                    )),
             )
             // ---- body: sections ---------------------------------------------
             .child(
@@ -141,7 +158,11 @@ impl AgentIdeApp {
                                 .cursor_pointer()
                                 .hover(move |s| s.bg(t.bg_hover))
                                 .child(icon(
-                                    if show_all { "chevron-up" } else { "chevron-down" },
+                                    if show_all {
+                                        "chevron-up"
+                                    } else {
+                                        "chevron-down"
+                                    },
                                     11.,
                                     t.text_3,
                                 ))
@@ -171,7 +192,11 @@ impl AgentIdeApp {
         let id = s.id.clone();
         let is_sel = self.state.active_session_id.as_deref() == Some(s.id.as_str());
         let renaming = self.renaming_session.as_deref() == Some(s.id.as_str());
-        let title = if s.title.is_empty() { s.id.clone() } else { s.title.clone() };
+        let title = if s.title.is_empty() {
+            s.id.clone()
+        } else {
+            s.title.clone()
+        };
         let dot = t.dot_for_status(s.status.as_deref().unwrap_or("idle"));
         let mode = s.mode.clone().unwrap_or_else(|| "hybrid".into());
         let status_label = match s.status.as_deref() {
@@ -206,7 +231,13 @@ impl AgentIdeApp {
                 .min_w(px(0.))
                 .flex()
                 .flex_col()
-                .child(div().text_size(px(12.4)).text_color(t.text).truncate().child(title))
+                .child(
+                    div()
+                        .text_size(px(12.4))
+                        .text_color(t.text)
+                        .truncate()
+                        .child(title),
+                )
                 .child(
                     div()
                         .text_size(px(10.2))
@@ -228,7 +259,11 @@ impl AgentIdeApp {
             .pr(px(6.))
             .py(px(6.))
             .border_l_2()
-            .border_color(if is_sel { t.accent } else { gpui::rgba(0x00000000) })
+            .border_color(if is_sel {
+                t.accent
+            } else {
+                gpui::rgba(0x00000000)
+            })
             .when(is_sel, |d| d.bg(t.bg_active))
             .cursor_pointer()
             .hover(move |st| st.bg(t.bg_hover))
@@ -302,7 +337,11 @@ impl AgentIdeApp {
             .filter(|p| !p.is_empty());
         let ws_name = ws_root
             .as_ref()
-            .and_then(|p| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()))
+            .and_then(|p| {
+                std::path::Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+            })
             .unwrap_or_else(|| "我的工作区".to_string());
 
         let mut foot = div()
@@ -312,11 +351,92 @@ impl AgentIdeApp {
             .gap(px(2.))
             .p(px(8.))
             .border_t_1()
-            .border_color(t.line);
+            .border_color(t.line)
+            .child(
+                div()
+                    .h(px(28.))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(8.))
+                    .rounded(px(6.))
+                    .text_size(px(12.4))
+                    .text_color(t.text_2)
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(t.bg_hover))
+                    .child(icon("folder", 13., t.text_3))
+                    .child(div().flex_1().child("Open Workspace"))
+                    .child(icon("chevron-up", 11., t.text_4))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                            this.ws_menu_open = !this.ws_menu_open;
+                            this.user_menu_open = false;
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(8.))
+                    .py(px(6.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(t.bg_hover))
+                    .child(
+                        div()
+                            .w(px(28.))
+                            .h(px(28.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(t.accent)
+                            .text_color(gpui::rgb(0xffffff))
+                            .text_size(px(12.))
+                            .child("我"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .text_size(px(12.))
+                                    .text_color(t.text)
+                                    .truncate()
+                                    .child("我的工作区"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(t.text_4)
+                                    .truncate()
+                                    .child(self.auth_user.clone().unwrap_or_else(|| "本地用户".into())),
+                            ),
+                    )
+                    .child(icon("chevron-up", 11., t.text_4))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                            this.user_menu_open = !this.user_menu_open;
+                            this.ws_menu_open = false;
+                            cx.notify();
+                        }),
+                    ),
+            );
 
-        // ---- workspace menu popup ------------------------------------------
+        // Popups render last so they paint above the foot rows.
         if self.ws_menu_open {
-            let mut menu = div()
+            let mut menu = float_surface(&t)
                 .absolute()
                 .bottom(px(70.))
                 .left(px(8.))
@@ -324,11 +444,7 @@ impl AgentIdeApp {
                 .flex()
                 .flex_col()
                 .p(px(4.))
-                .rounded(px(10.))
-                .border_1()
-                .border_color(t.line_strong)
-                .bg(t.bg_panel)
-                .shadow(sh_float());
+                .rounded(px(10.));
             if let Some(root) = &ws_root {
                 let root = root.clone();
                 menu = menu.child(
@@ -349,7 +465,13 @@ impl AgentIdeApp {
                                 .flex()
                                 .flex_col()
                                 .child(div().text_size(px(12.)).truncate().child(ws_name.clone()))
-                                .child(div().text_size(px(10.5)).text_color(t.text_4).truncate().child(root)),
+                                .child(
+                                    div()
+                                        .text_size(px(10.5))
+                                        .text_color(t.text_4)
+                                        .truncate()
+                                        .child(root),
+                                ),
                         )
                         .child(icon("check", 11., t.accent)),
                 );
@@ -371,10 +493,9 @@ impl AgentIdeApp {
             foot = foot.child(menu);
         }
 
-        // ---- user menu popup -------------------------------------------------
         if self.user_menu_open {
             foot = foot.child(
-                div()
+                float_surface(&t)
                     .absolute()
                     .bottom(px(40.))
                     .left(px(8.))
@@ -383,10 +504,6 @@ impl AgentIdeApp {
                     .flex_col()
                     .p(px(4.))
                     .rounded(px(8.))
-                    .border_1()
-                    .border_color(t.line_strong)
-                    .bg(t.bg_panel)
-                    .shadow(sh_float())
                     .child(
                         super::menu_item("user-round", "个人资料", false, &t).on_mouse_down(
                             MouseButton::Left,
@@ -410,81 +527,7 @@ impl AgentIdeApp {
             );
         }
 
-        foot.child(
-            div()
-                .h(px(28.))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.))
-                .px(px(8.))
-                .rounded(px(6.))
-                .text_size(px(12.4))
-                .text_color(t.text_2)
-                .cursor_pointer()
-                .hover(move |s| s.bg(t.bg_hover))
-                .child(icon("folder", 13., t.text_3))
-                .child(div().flex_1().child("Open Workspace"))
-                .child(icon("chevron-up", 11., t.text_4))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
-                        this.ws_menu_open = !this.ws_menu_open;
-                        this.user_menu_open = false;
-                        cx.notify();
-                    }),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(8.))
-                .px(px(8.))
-                .py(px(6.))
-                .rounded(px(6.))
-                .cursor_pointer()
-                .hover(move |s| s.bg(t.bg_hover))
-                .child(
-                    div()
-                        .w(px(28.))
-                        .h(px(28.))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded_full()
-                        .bg(t.accent)
-                        .text_color(gpui::rgb(0xffffff))
-                        .text_size(px(12.))
-                        .child("我"),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .flex()
-                        .flex_col()
-                        .child(div().text_size(px(12.)).text_color(t.text).truncate().child("我的工作区"))
-                        .child(
-                            div()
-                                .text_size(px(10.5))
-                                .text_color(t.text_4)
-                                .truncate()
-                                .child(self.auth_user.clone().unwrap_or_else(|| "本地用户".into())),
-                        ),
-                )
-                .child(icon("chevron-up", 11., t.text_4))
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
-                        this.user_menu_open = !this.user_menu_open;
-                        this.ws_menu_open = false;
-                        cx.notify();
-                    }),
-                ),
-        )
+        foot
     }
 
     fn sidebar_action(
@@ -520,7 +563,11 @@ impl AgentIdeApp {
     }
 }
 
-fn disabled_item(icon_name: &'static str, label: &'static str, t: &moonlit_uikit::Tokens) -> gpui::Div {
+fn disabled_item(
+    icon_name: &'static str,
+    label: &'static str,
+    t: &moonlit_uikit::Tokens,
+) -> gpui::Div {
     let t = *t;
     div()
         .h(px(26.))

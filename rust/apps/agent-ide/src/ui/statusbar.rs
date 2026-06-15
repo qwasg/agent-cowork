@@ -22,30 +22,52 @@ impl AgentIdeApp {
                 .h_full()
         };
 
-        let api_label = if self.connected { "Agent Debug online" } else { "Agent Debug offline" };
-        let api_dot = if self.connected { t.dot_done } else { t.dot_blocked };
+        let api_label = if self.connected {
+            "Agent Debug online"
+        } else {
+            "Agent Debug offline"
+        };
+        let api_dot = if self.connected {
+            t.dot_done
+        } else {
+            t.dot_blocked
+        };
         // Legacy provider segment: "Live · <model>" / "Mock provider" / offline.
         let (provider_label, provider_dot) = match &self.provider {
             Some((mode, model)) if mode == "live" => (format!("Live · {model}"), t.dot_done),
             Some((mode, _)) if mode == "mock" => ("Mock provider".to_string(), t.dot_running),
             Some(_) => ("Provider offline".to_string(), t.dot_blocked),
             None => (
-                if self.connected { "Provider unknown".to_string() } else { "Provider offline".to_string() },
+                if self.connected {
+                    "Provider unknown".to_string()
+                } else {
+                    "Provider offline".to_string()
+                },
                 t.dot_blocked,
             ),
         };
         let model_label = self
-            .provider
+            .selected_model
             .as_ref()
-            .map(|(_, model)| model.clone())
+            .map(|id| self.model_display_label(id))
+            .or_else(|| self.provider.as_ref().map(|(_, model)| model.clone()))
             .unwrap_or_else(|| "default model".to_string());
-        let branch = self.git_branch.clone().unwrap_or_else(|| "main".to_string());
+        let branch = self
+            .git_branch
+            .clone()
+            .unwrap_or_else(|| "main".to_string());
         let session_title = self
             .state
             .active_session_id
             .as_ref()
             .and_then(|id| self.state.sessions.iter().find(|s| &s.id == id))
-            .map(|s| if s.title.is_empty() { s.id.clone() } else { s.title.clone() })
+            .map(|s| {
+                if s.title.is_empty() {
+                    s.id.clone()
+                } else {
+                    s.title.clone()
+                }
+            })
             .unwrap_or_else(|| "Agent Build".to_string());
         let (done, total) = self
             .metrics
@@ -82,8 +104,16 @@ impl AgentIdeApp {
             .text_size(px(11.))
             .text_color(t.text_3)
             .child(seg(div()).child(status_dot(api_dot)).child(api_label))
-            .child(seg(div()).child(status_dot(provider_dot)).child(provider_label))
-            .child(seg(div()).child(icon("git-branch", 11., t.text_3)).child(branch))
+            .child(
+                seg(div())
+                    .child(status_dot(provider_dot))
+                    .child(provider_label),
+            )
+            .child(
+                seg(div())
+                    .child(icon("git-branch", 11., t.text_3))
+                    .child(branch),
+            )
             .child(
                 seg(div())
                     .text_color(t.accent)
@@ -103,7 +133,9 @@ impl AgentIdeApp {
                     .child(format!("联网搜索 {}", if web { "开" } else { "关" }))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, _ev: &MouseDownEvent, _w, cx| this.toggle_web_search(cx)),
+                        cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                            this.toggle_web_search(cx)
+                        }),
                     ),
             )
             .child(seg(div()).child(model_label))

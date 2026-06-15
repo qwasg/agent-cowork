@@ -88,7 +88,12 @@ impl AgentIdeApp {
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .child("月夜 · 文档编译助手"),
                                     )
-                                    .child(div().text_size(px(11.)).text_color(t.text_3).child("登录以继续")),
+                                    .child(
+                                        div()
+                                            .text_size(px(11.))
+                                            .text_color(t.text_3)
+                                            .child("登录以继续"),
+                                    ),
                             ),
                     )
                     .child(field("邮箱", self.auth_email.clone()))
@@ -119,7 +124,11 @@ impl AgentIdeApp {
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .cursor_pointer()
                             .hover(move |s| s.bg(t.accent_soft))
-                            .child(if self.login_busy { "登录中…" } else { "登录" })
+                            .child(if self.login_busy {
+                                "登录中…"
+                            } else {
+                                "登录"
+                            })
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|this, _ev: &MouseDownEvent, _w, cx| this.do_login(cx)),
@@ -143,7 +152,9 @@ impl AgentIdeApp {
                             .child("跳过登录（调试）")
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| this.skip_login(cx)),
+                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                                    this.skip_login(cx)
+                                }),
                             ),
                     )
                     .child(

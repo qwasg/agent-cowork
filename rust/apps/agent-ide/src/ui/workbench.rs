@@ -11,15 +11,38 @@ use super::{ibtn, sh1, status_dot};
 use crate::app::AgentIdeApp;
 use crate::{BottomPanelTab, ProposalView, TabKind};
 
-/// Extract `(title, status)` step rows from a plan bundle payload.
-fn plan_steps(bundle: &serde_json::Value) -> Vec<(String, String)> {
+/// Collect task/step nodes from the various plan bundle shapes the backend may
+/// emit (snapshot bundle, raw `Plan` with nested stages, legacy steps arrays).
+fn plan_task_elements(bundle: &serde_json::Value) -> Vec<serde_json::Value> {
+    let mut out: Vec<serde_json::Value> = Vec::new();
+    if let Some(tasks) = bundle.get("tasks").and_then(|v| v.as_array()) {
+        out.extend(tasks.iter().cloned());
+    }
     let plan = bundle.get("plan").unwrap_or(bundle);
-    let arr = plan
+    if let Some(arr) = plan
         .get("steps")
         .or_else(|| plan.get("todos"))
         .or_else(|| plan.get("nodes"))
-        .and_then(|v| v.as_array());
-    let Some(arr) = arr else { return Vec::new() };
+        .and_then(|v| v.as_array())
+    {
+        out.extend(arr.iter().cloned());
+    }
+    if let Some(stages) = plan.get("stages").and_then(|v| v.as_array()) {
+        for stage in stages {
+            if let Some(tasks) = stage.get("tasks").and_then(|v| v.as_array()) {
+                out.extend(tasks.iter().cloned());
+            }
+        }
+    }
+    out
+}
+
+/// Extract `(title, status)` step rows from a plan bundle payload.
+fn plan_steps(bundle: &serde_json::Value) -> Vec<(String, String)> {
+    let arr = plan_task_elements(bundle);
+    if arr.is_empty() {
+        return Vec::new();
+    }
     arr.iter()
         .filter_map(|el| {
             let title = el
@@ -42,13 +65,10 @@ fn plan_steps(bundle: &serde_json::Value) -> Vec<(String, String)> {
 /// Like [`plan_steps`] but also keeps each node's id when present, so the Tree
 /// view can offer per-node rerun.
 fn plan_steps_full(bundle: &serde_json::Value) -> Vec<(String, String, Option<String>)> {
-    let plan = bundle.get("plan").unwrap_or(bundle);
-    let arr = plan
-        .get("steps")
-        .or_else(|| plan.get("todos"))
-        .or_else(|| plan.get("nodes"))
-        .and_then(|v| v.as_array());
-    let Some(arr) = arr else { return Vec::new() };
+    let arr = plan_task_elements(bundle);
+    if arr.is_empty() {
+        return Vec::new();
+    }
     arr.iter()
         .filter_map(|el| {
             let title = el
@@ -75,12 +95,25 @@ fn plan_steps_full(bundle: &serde_json::Value) -> Vec<(String, String, Option<St
 
 /// Legacy `makePages` icon mapping.
 fn tab_icon(id: &str) -> &'static str {
+    if id.starts_with("doc:") {
+        let lower = id.to_ascii_lowercase();
+        if lower.ends_with(".pptx") {
+            return "file-text";
+        }
+        if lower.ends_with(".docx") {
+            return "file-text";
+        }
+        if lower.ends_with(".pdf") {
+            return "file";
+        }
+    }
     match id {
         "plan" => "list-tree",
         "todo" => "list-checks",
         "diff" => "git-compare",
         "swarm" => "network",
         "readme" => "file-text",
+        "docforge" => "file-text",
         _ => "file",
     }
 }
@@ -117,12 +150,22 @@ impl AgentIdeApp {
     fn render_tabbar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let t = self.t;
         let active = self.active_tab.clone();
-        let open_tabs: Vec<(String, String)> = self
+        let open_tabs: Vec<(String, String, bool)> = self
             .state
             .workbench
             .tabs
             .iter()
-            .map(|tab| (tab.id.clone(), tab.title.clone()))
+            .map(|tab| {
+                let dirty = if let Some(rel) = tab.id.strip_prefix("doc:") {
+                    self.document_editors
+                        .get(rel)
+                        .map(|e| e.read(cx).is_dirty())
+                        .unwrap_or(false)
+                } else {
+                    tab.dirty
+                };
+                (tab.id.clone(), tab.title.clone(), dirty)
+            })
             .collect();
 
         let mut bar = div()
@@ -135,7 +178,7 @@ impl AgentIdeApp {
             .border_b_1()
             .border_color(t.line);
 
-        for (id, title) in open_tabs {
+        for (id, title, dirty) in open_tabs {
             let is_active = active == id;
             let icon_name = tab_icon(&id);
             let open_id = id.clone();
@@ -150,13 +193,31 @@ impl AgentIdeApp {
                     .items_center()
                     .gap(px(6.))
                     .border_t_2()
-                    .border_color(if is_active { t.accent } else { gpui::rgba(0x00000000) })
+                    .border_color(if is_active {
+                        t.accent
+                    } else {
+                        gpui::rgba(0x00000000)
+                    })
                     .when(is_active, |d| d.bg(t.bg))
                     .text_size(px(12.))
                     .text_color(if is_active { t.text } else { t.text_3 })
                     .cursor_pointer()
-                    .child(icon(icon_name, 12., if is_active { t.text_2 } else { t.text_4 }))
+                    .child(icon(
+                        icon_name,
+                        12.,
+                        if is_active { t.text_2 } else { t.text_4 },
+                    ))
                     .child(div().max_w(px(140.)).truncate().child(title))
+                    .when(dirty, |d| {
+                        d.child(
+                            div()
+                                .w(px(7.))
+                                .h(px(7.))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(t.accent),
+                        )
+                    })
                     .child(
                         div()
                             .w(px(16.))
@@ -184,21 +245,32 @@ impl AgentIdeApp {
             );
         }
         // `.tabs-actions`: split + more
-        bar.child(div().flex_1().min_w(px(40.)))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .pr(px(4.))
-                    .child(ibtn("columns-2", 12., &t, |this, _w, cx| {
+        bar.child(div().flex_1().min_w(px(40.))).child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .pr(px(4.))
+                .child(ibtn(
+                    "columns-2",
+                    12.,
+                    &t,
+                    |this, _w, cx| {
                         this.toast("拆分视图开发中", moonlit_uikit::ToastKind::Info, cx);
-                    }, cx))
-                    .child(ibtn("more-horizontal", 12., &t, |this, _w, cx| {
+                    },
+                    cx,
+                ))
+                .child(ibtn(
+                    "more-horizontal",
+                    12.,
+                    &t,
+                    |this, _w, cx| {
                         this.palette_open = true;
                         cx.notify();
-                    }, cx)),
-            )
+                    },
+                    cx,
+                )),
+        )
     }
 
     fn render_tab_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -209,7 +281,20 @@ impl AgentIdeApp {
             "diff" => self.render_diff_page(cx).into_any_element(),
             "swarm" => self.render_swarm_page().into_any_element(),
             "readme" => self.render_readme_page(cx).into_any_element(),
-            other if other.starts_with("file:") => self.render_file_page(other.to_string()).into_any_element(),
+            "docforge" => self.docforge.clone().into_any_element(),
+            other if other.starts_with("doc:") => {
+                let path = other.trim_start_matches("doc:").to_string();
+                if let Some(editor) = self.document_editors.get(&path) {
+                    editor.clone().into_any_element()
+                } else if let Some(text) = self.document_previews.get(&path) {
+                    self.render_document_text(&path, text).into_any_element()
+                } else {
+                    self.render_document_loading(&path).into_any_element()
+                }
+            }
+            other if other.starts_with("file:") => {
+                self.render_file_page(other.to_string()).into_any_element()
+            }
             _ => self.render_empty_page().into_any_element(),
         }
     }
@@ -297,7 +382,9 @@ impl AgentIdeApp {
                 .py(px(4.))
                 .rounded_full()
                 .text_size(px(12.))
-                .when(is_active, |d| d.bg(t.bg_panel).shadow(sh1()).text_color(t.text))
+                .when(is_active, |d| {
+                    d.bg(t.bg_panel).shadow(sh1()).text_color(t.text)
+                })
                 .when(!is_active, |d| d.text_color(t.text_3))
                 .cursor_pointer()
                 .child(label)
@@ -311,7 +398,10 @@ impl AgentIdeApp {
         };
 
         // meta row: 状态 / 进度 / Tokens / Todos / Subagents
-        let done = steps.iter().filter(|(_, s)| matches!(s.as_str(), "completed" | "done")).count();
+        let done = steps
+            .iter()
+            .filter(|(_, s)| matches!(s.as_str(), "completed" | "done"))
+            .count();
         let meta_chip = |label: String| {
             div()
                 .h(px(22.))
@@ -336,7 +426,12 @@ impl AgentIdeApp {
                 .flex_col()
                 .items_center()
                 .gap(px(8.))
-                .child(div().text_size(px(24.)).font_family(FONT_SERIF).child("尚无计划"))
+                .child(
+                    div()
+                        .text_size(px(24.))
+                        .font_family(FONT_SERIF)
+                        .child("尚无计划"),
+                )
                 .child(
                     div()
                         .text_size(px(12.))
@@ -376,11 +471,17 @@ impl AgentIdeApp {
                             .child("Plan"),
                     )
                     .child(div().flex_1())
-                    .child(ibtn("rotate-cw", 12., &t, |this, _w, cx| {
-                        if let Some(id) = this.state.active_session_id.clone() {
-                            this.select_session(id, cx);
-                        }
-                    }, cx))
+                    .child(ibtn(
+                        "rotate-cw",
+                        12.,
+                        &t,
+                        |this, _w, cx| {
+                            if let Some(id) = this.state.active_session_id.clone() {
+                                this.select_session(id, cx);
+                            }
+                        },
+                        cx,
+                    ))
                     .child(
                         div()
                             .flex()
@@ -400,7 +501,10 @@ impl AgentIdeApp {
                     .flex_row()
                     .flex_wrap()
                     .gap(px(6.))
-                    .child(meta_chip(format!("状态: {}", if running { "运行中" } else { "空闲" })))
+                    .child(meta_chip(format!(
+                        "状态: {}",
+                        if running { "运行中" } else { "空闲" }
+                    )))
                     .child(meta_chip(format!("进度: {done}/{}", steps.len())))
                     .child(meta_chip(format!("Tokens: {}", self.metrics.total_tokens)))
                     .child(meta_chip(format!("Todos: {}", self.state.todos.len())))
@@ -413,9 +517,27 @@ impl AgentIdeApp {
                         .flex_row()
                         .flex_wrap()
                         .gap(px(8.))
-                        .child(super::btn("确认计划", false, &t, |this, _w, cx| this.confirm_active_plan(cx), cx))
-                        .child(super::btn("执行计划", true, &t, |this, _w, cx| this.execute_active_plan(cx), cx))
-                        .child(super::btn("重新规划", false, &t, |this, _w, cx| this.replan_active_plan(cx), cx)),
+                        .child(super::btn(
+                            "确认计划",
+                            false,
+                            &t,
+                            |this, _w, cx| this.confirm_active_plan(cx),
+                            cx,
+                        ))
+                        .child(super::btn(
+                            "执行计划",
+                            true,
+                            &t,
+                            |this, _w, cx| this.execute_active_plan(cx),
+                            cx,
+                        ))
+                        .child(super::btn(
+                            "重新规划",
+                            false,
+                            &t,
+                            |this, _w, cx| this.replan_active_plan(cx),
+                            cx,
+                        )),
                 )
             })
             .child(body)
@@ -447,7 +569,13 @@ impl AgentIdeApp {
                     .border_color(t.line)
                     .bg(t.bg_panel)
                     .child(status_dot(t.dot_for_status(status)))
-                    .child(div().flex_1().min_w(px(0.)).text_size(px(13.)).child(title.clone()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .text_size(px(13.))
+                            .child(title.clone()),
+                    )
                     .child(
                         div()
                             .px(px(7.))
@@ -461,9 +589,13 @@ impl AgentIdeApp {
                     );
                 if can_rerun {
                     if let Some(node_id) = id.clone() {
-                        row = row.child(ibtn("rotate-cw", 11., &t, move |this, _w, cx| {
-                            this.rerun_plan_node(node_id.clone(), cx)
-                        }, cx));
+                        row = row.child(ibtn(
+                            "rotate-cw",
+                            11.,
+                            &t,
+                            move |this, _w, cx| this.rerun_plan_node(node_id.clone(), cx),
+                            cx,
+                        ));
                     }
                 }
                 row
@@ -474,7 +606,12 @@ impl AgentIdeApp {
     /// DAG view (simplified): node chips chained with arrows.
     fn render_plan_dag(&self, steps: &[(String, String)]) -> AnyElement {
         let t = self.t;
-        let mut row = div().flex().flex_row().flex_wrap().items_center().gap(px(6.));
+        let mut row = div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(6.));
         for (i, (title, status)) in steps.iter().enumerate() {
             if i > 0 {
                 row = row.child(div().text_color(t.text_4).child("→"));
@@ -535,7 +672,13 @@ impl AgentIdeApp {
                             .h(px(8.))
                             .rounded_full()
                             .bg(t.bg_active)
-                            .child(div().w(gpui::relative(fill)).h_full().rounded_full().bg(color)),
+                            .child(
+                                div()
+                                    .w(gpui::relative(fill))
+                                    .h_full()
+                                    .rounded_full()
+                                    .bg(color),
+                            ),
                     )
             }))
             .into_any_element()
@@ -613,7 +756,9 @@ impl AgentIdeApp {
         let review = bucket(&["review", "blocked", "failed"]);
         let done_items = bucket(&["completed", "done"]);
 
-        let column = |label: &'static str, items: Vec<moonlit_core::models::TodoItem>, cx: &mut Context<Self>| {
+        let column = |label: &'static str,
+                      items: Vec<moonlit_core::models::TodoItem>,
+                      cx: &mut Context<Self>| {
             let mut col = div()
                 .flex_1()
                 .min_w(px(180.))
@@ -663,23 +808,26 @@ impl AgentIdeApp {
                                 .items_center()
                                 .gap(px(6.))
                                 .child(status_dot(t.dot_for_status(&td.status)))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w(px(0.))
-                                        .text_size(px(12.5))
-                                        .child(if td.title.is_empty() { td.id.clone() } else { td.title.clone() }),
-                                ),
+                                .child(div().flex_1().min_w(px(0.)).text_size(px(12.5)).child(
+                                    if td.title.is_empty() {
+                                        td.id.clone()
+                                    } else {
+                                        td.title.clone()
+                                    },
+                                )),
                         )
-                        .when_some(td.description.clone().filter(|d| !d.is_empty()), |d, desc| {
-                            d.child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(t.text_3)
-                                    .line_clamp(2)
-                                    .child(desc),
-                            )
-                        })
+                        .when_some(
+                            td.description.clone().filter(|d| !d.is_empty()),
+                            |d, desc| {
+                                d.child(
+                                    div()
+                                        .text_size(px(11.))
+                                        .text_color(t.text_3)
+                                        .line_clamp(2)
+                                        .child(desc),
+                                )
+                            },
+                        )
                         .child({
                             let td_id = td.id.clone();
                             let mut foot = div()
@@ -700,12 +848,21 @@ impl AgentIdeApp {
                                         .text_color(t.accent)
                                         .child("月"),
                                 )
-                                .child(div().text_size(px(10.)).text_color(t.text_4).child(td.status.clone()))
+                                .child(
+                                    div()
+                                        .text_size(px(10.))
+                                        .text_color(t.text_4)
+                                        .child(td.status.clone()),
+                                )
                                 .child(div().flex_1());
                             if can_rerun {
-                                foot = foot.child(ibtn("rotate-cw", 11., &t, move |this, _w, cx| {
-                                    this.rerun_todo_action(td_id.clone(), cx)
-                                }, cx));
+                                foot = foot.child(ibtn(
+                                    "rotate-cw",
+                                    11.,
+                                    &t,
+                                    move |this, _w, cx| this.rerun_todo_action(td_id.clone(), cx),
+                                    cx,
+                                ));
                             }
                             foot
                         }),
@@ -731,7 +888,12 @@ impl AgentIdeApp {
                     .child("Todo"),
             )
             .when(todos.is_empty(), |d| {
-                d.child(div().text_size(px(12.)).text_color(t.text_4).child("暂无待办。"))
+                d.child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(t.text_4)
+                        .child("暂无待办。"),
+                )
             })
             .child(
                 div()
@@ -775,7 +937,12 @@ impl AgentIdeApp {
                         .font_weight(gpui::FontWeight::BOLD)
                         .child("Diff"),
                 )
-                .child(div().text_size(px(12.)).text_color(t.text_4).child("暂无变更提案。"));
+                .child(
+                    div()
+                        .text_size(px(12.))
+                        .text_color(t.text_4)
+                        .child("暂无变更提案。"),
+                );
         }
         let p: &ProposalView = &proposals[idx];
 
@@ -794,12 +961,18 @@ impl AgentIdeApp {
                         .child("Diff"),
                 )
                 .child(div().flex_1())
-                .child(ibtn("chevron-left", 12., &t, |this, _w, cx| {
-                    if this.diff_index > 0 {
-                        this.diff_index -= 1;
-                        cx.notify();
-                    }
-                }, cx))
+                .child(ibtn(
+                    "chevron-left",
+                    12.,
+                    &t,
+                    |this, _w, cx| {
+                        if this.diff_index > 0 {
+                            this.diff_index -= 1;
+                            cx.notify();
+                        }
+                    },
+                    cx,
+                ))
                 .child(
                     div()
                         .font_family(FONT_MONO_FALLBACK)
@@ -807,13 +980,19 @@ impl AgentIdeApp {
                         .text_color(t.text_3)
                         .child(format!("{}/{}", idx + 1, total)),
                 )
-                .child(ibtn("chevron-right", 12., &t, |this, _w, cx| {
-                    let total = this.state.workbench.proposals.len();
-                    if this.diff_index + 1 < total {
-                        this.diff_index += 1;
-                        cx.notify();
-                    }
-                }, cx))
+                .child(ibtn(
+                    "chevron-right",
+                    12.,
+                    &t,
+                    |this, _w, cx| {
+                        let total = this.state.workbench.proposals.len();
+                        if this.diff_index + 1 < total {
+                            this.diff_index += 1;
+                            cx.notify();
+                        }
+                    },
+                    cx,
+                ))
                 .child(
                     div()
                         .h(px(26.))
@@ -873,7 +1052,13 @@ impl AgentIdeApp {
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(p.path.clone())
                 .when_some(p.summary.clone().filter(|s| !s.is_empty()), |d, s| {
-                    d.child(div().text_size(px(11.)).text_color(t.text_3).font_weight(gpui::FontWeight::NORMAL).child(s))
+                    d.child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(t.text_3)
+                            .font_weight(gpui::FontWeight::NORMAL)
+                            .child(s),
+                    )
                 }),
         );
 
@@ -893,7 +1078,11 @@ impl AgentIdeApp {
                 .text_size(px(11.5));
             for (text, marked) in lines.into_iter().take(400) {
                 let (bg, fg) = if marked {
-                    if removed { (t.danger_bg, t.danger) } else { (t.sage_bg, t.sage) }
+                    if removed {
+                        (t.danger_bg, t.danger)
+                    } else {
+                        (t.sage_bg, t.sage)
+                    }
                 } else {
                     (gpui::rgba(0x00000000), t.text_3)
                 };
@@ -905,13 +1094,23 @@ impl AgentIdeApp {
             .diff
             .iter()
             .filter(|l| l.tag != DiffTag::Insert)
-            .map(|l| (l.text.trim_end_matches('\n').to_string(), l.tag == DiffTag::Delete))
+            .map(|l| {
+                (
+                    l.text.trim_end_matches('\n').to_string(),
+                    l.tag == DiffTag::Delete,
+                )
+            })
             .collect();
         let right: Vec<(String, bool)> = p
             .diff
             .iter()
             .filter(|l| l.tag != DiffTag::Delete)
-            .map(|l| (l.text.trim_end_matches('\n').to_string(), l.tag == DiffTag::Insert))
+            .map(|l| {
+                (
+                    l.text.trim_end_matches('\n').to_string(),
+                    l.tag == DiffTag::Insert,
+                )
+            })
             .collect();
         page.child(
             div()
@@ -1054,13 +1253,15 @@ impl AgentIdeApp {
             .bg(t.bg_sunk)
             .overflow_hidden()
             .child(grid)
-            .child(
-                div()
-                    .absolute()
-                    .left(px(40.))
-                    .top(px(56.))
-                    .child(node_card("主 Agent".into(), if self.state.chat.active_run_id.is_some() { "running".into() } else { "idle".into() }, true)),
-            );
+            .child(div().absolute().left(px(40.)).top(px(56.)).child(node_card(
+                "主 Agent".into(),
+                if self.state.chat.active_run_id.is_some() {
+                    "running".into()
+                } else {
+                    "idle".into()
+                },
+                true,
+            )));
         if children.is_empty() {
             stage = stage.child(
                 div()
@@ -1135,7 +1336,13 @@ impl AgentIdeApp {
                             .child("README.md"),
                     )
                     .child(div().flex_1())
-                    .child(ibtn("rotate-cw", 12., &t, |this, _w, cx| this.refresh_readme(cx), cx))
+                    .child(ibtn(
+                        "rotate-cw",
+                        12.,
+                        &t,
+                        |this, _w, cx| this.refresh_readme(cx),
+                        cx,
+                    ))
                     .child(
                         div()
                             .h(px(24.))
@@ -1179,6 +1386,67 @@ impl AgentIdeApp {
     }
 
     // ---- File tab ----------------------------------------------------------------
+
+    fn render_document_loading(&self, path: &str) -> impl IntoElement {
+        let t = self.t;
+        div()
+            .id("doc-loading")
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_size(px(13.))
+            .text_color(t.text_3)
+            .child(format!("正在加载 {path}…"))
+    }
+
+    /// Read-only extracted-text view for non-editable documents (PDF).
+    fn render_document_text(&self, _path: &str, text: &str) -> impl IntoElement {
+        let t = self.t;
+        let owned = text.to_string();
+        div()
+            .id("doc-text")
+            .flex_1()
+            .min_h(px(0.))
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(12.))
+                    .py(px(6.))
+                    .bg(t.bg_sunk)
+                    .border_b_1()
+                    .border_color(t.line)
+                    .text_size(px(11.5))
+                    .text_color(t.text_3)
+                    .child("只读预览（PDF 抽取文本，不可编辑保存）"),
+            )
+            .child(
+                div()
+                    .id("doc-text-body")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .p(px(12.))
+                    .overflow_y_scroll()
+                    .font_family(FONT_MONO_FALLBACK)
+                    .text_size(px(12.5))
+                    .children(owned.lines().take(4000).enumerate().map(|(i, line)| {
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(12.))
+                            .child(
+                                div()
+                                    .w(px(44.))
+                                    .flex_none()
+                                    .text_color(t.text_4)
+                                    .child(format!("{}", i + 1)),
+                            )
+                            .child(div().text_color(t.text_2).child(line.to_string()))
+                    })),
+            )
+    }
 
     fn render_file_page(&self, id: String) -> impl IntoElement {
         let t = self.t;
@@ -1231,10 +1499,25 @@ impl AgentIdeApp {
         let event_count = self.events.len();
         let term_count = self.term_history.len();
         let tabs: &[(BottomPanelTab, &str, &str, Option<usize>)] = &[
-            (BottomPanelTab::Problems, "circle-alert", "Problems", Some(0)),
+            (
+                BottomPanelTab::Problems,
+                "circle-alert",
+                "Problems",
+                Some(0),
+            ),
             (BottomPanelTab::Output, "logs", "Output", Some(log_count)),
-            (BottomPanelTab::Terminal, "terminal", "Terminal", Some(term_count)),
-            (BottomPanelTab::Logs, "scroll-text", "Agent Logs", Some(event_count)),
+            (
+                BottomPanelTab::Terminal,
+                "terminal",
+                "Terminal",
+                Some(term_count),
+            ),
+            (
+                BottomPanelTab::Logs,
+                "scroll-text",
+                "Agent Logs",
+                Some(event_count),
+            ),
             (BottomPanelTab::Metrics, "activity", "Metrics", None),
         ];
 
@@ -1258,12 +1541,20 @@ impl AgentIdeApp {
                 .items_center()
                 .gap(px(5.))
                 .border_t_2()
-                .border_color(if is_active { t.accent } else { gpui::rgba(0x00000000) })
+                .border_color(if is_active {
+                    t.accent
+                } else {
+                    gpui::rgba(0x00000000)
+                })
                 .when(is_active, |d| d.bg(t.bg))
                 .text_size(px(12.))
                 .text_color(if is_active { t.text } else { t.text_3 })
                 .cursor_pointer()
-                .child(icon(icon_name, 11., if is_active { t.text_2 } else { t.text_4 }))
+                .child(icon(
+                    icon_name,
+                    11.,
+                    if is_active { t.text_2 } else { t.text_4 },
+                ))
                 .child(*label);
             if let Some(count) = count {
                 node = node.child(
@@ -1281,12 +1572,24 @@ impl AgentIdeApp {
         }
         bar = bar
             .child(div().flex_1())
-            .child(ibtn("trash-2", 12., &t, |this, _w, cx| {
-                this.logs.clear();
-                this.toast("已清空", moonlit_uikit::ToastKind::Info, cx);
-            }, cx))
+            .child(ibtn(
+                "trash-2",
+                12.,
+                &t,
+                |this, _w, cx| {
+                    this.logs.clear();
+                    this.toast("已清空", moonlit_uikit::ToastKind::Info, cx);
+                },
+                cx,
+            ))
             .child(ibtn("maximize-2", 12., &t, |_this, _w, _cx| {}, cx))
-            .child(ibtn("x", 12., &t, |this, _w, cx| this.toggle_bottom(cx), cx));
+            .child(ibtn(
+                "x",
+                12.,
+                &t,
+                |this, _w, cx| this.toggle_bottom(cx),
+                cx,
+            ));
 
         let body: AnyElement = match active {
             BottomPanelTab::Terminal => {
@@ -1344,11 +1647,19 @@ impl AgentIdeApp {
                             .cursor_pointer()
                             .hover(move |s| s.bg(t.bg_hover))
                             .child(icon(
-                                if expanded { "chevron-down" } else { "chevron-right" },
+                                if expanded {
+                                    "chevron-down"
+                                } else {
+                                    "chevron-right"
+                                },
                                 9.,
                                 t.text_4,
                             ))
-                            .child(div().text_color(t.text_4).child(format!("#{}", evt.seq.unwrap_or(0))))
+                            .child(
+                                div()
+                                    .text_color(t.text_4)
+                                    .child(format!("#{}", evt.seq.unwrap_or(0))),
+                            )
                             .child(div().text_color(t.text_2).child(evt.event_type.clone()))
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -1359,7 +1670,8 @@ impl AgentIdeApp {
                             ),
                     );
                     if expanded {
-                        let payload = serde_json::to_string_pretty(&evt.payload).unwrap_or_default();
+                        let payload =
+                            serde_json::to_string_pretty(&evt.payload).unwrap_or_default();
                         col = col.child(
                             div()
                                 .ml(px(18.))
@@ -1370,7 +1682,9 @@ impl AgentIdeApp {
                                 .flex()
                                 .flex_col()
                                 .text_color(t.text_3)
-                                .children(payload.lines().take(40).map(|l| div().child(l.to_string()))),
+                                .children(
+                                    payload.lines().take(40).map(|l| div().child(l.to_string())),
+                                ),
                         );
                     }
                 }
@@ -1381,7 +1695,9 @@ impl AgentIdeApp {
                 div()
                     .flex()
                     .flex_col()
-                    .when(lines.is_empty(), |d| d.child(div().text_color(t.text_4).child("（无输出）")))
+                    .when(lines.is_empty(), |d| {
+                        d.child(div().text_color(t.text_4).child("（无输出）"))
+                    })
                     .children(lines.into_iter().map(|l| div().child(l)))
                     .into_any_element()
             }
@@ -1431,7 +1747,10 @@ impl AgentIdeApp {
                             .child(card("Subagents", format!("{}", m.subagents)))
                             .child(card("Context fill", format!("{:.0}%", m.context_fill_pct)))
                             .child(card("Sessions", format!("{}", self.state.sessions.len())))
-                            .child(card("Messages", format!("{}", self.state.chat.messages.len()))),
+                            .child(card(
+                                "Messages",
+                                format!("{}", self.state.chat.messages.len()),
+                            )),
                     )
                     .into_any_element()
             }

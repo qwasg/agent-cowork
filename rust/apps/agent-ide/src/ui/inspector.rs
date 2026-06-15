@@ -28,8 +28,21 @@ impl AgentIdeApp {
                 .flex_row()
                 .gap(px(8.))
                 .text_size(px(11.))
-                .child(div().w(px(44.)).flex_none().text_color(t.text_4).child(label))
-                .child(div().flex_1().min_w(px(0.)).truncate().text_color(t.text_2).child(value))
+                .child(
+                    div()
+                        .w(px(44.))
+                        .flex_none()
+                        .text_color(t.text_4)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .truncate()
+                        .text_color(t.text_2)
+                        .child(value),
+                )
         };
 
         div()
@@ -40,26 +53,24 @@ impl AgentIdeApp {
             .flex_col()
             .bg(t.bg_sunk)
             // ---- workspace tree ------------------------------------------------
-            .child(
-                sec_head("folder-tree", "工作区", &t).when_some(
-                    self.git_branch.clone(),
-                    |d, branch| {
-                        d.child(
-                            div()
-                                .ml_auto()
-                                .max_w(px(110.))
-                                .px(px(7.))
-                                .py(px(1.))
-                                .rounded_full()
-                                .bg(t.accent_bg)
-                                .text_size(px(10.))
-                                .text_color(t.accent)
-                                .truncate()
-                                .child(branch),
-                        )
-                    },
-                ),
-            )
+            .child(sec_head("folder-tree", "工作区", &t).when_some(
+                self.git_branch.clone(),
+                |d, branch| {
+                    d.child(
+                        div()
+                            .ml_auto()
+                            .max_w(px(110.))
+                            .px(px(7.))
+                            .py(px(1.))
+                            .rounded_full()
+                            .bg(t.accent_bg)
+                            .text_size(px(10.))
+                            .text_color(t.accent)
+                            .truncate()
+                            .child(branch),
+                    )
+                },
+            ))
             .child(
                 div().px(px(10.)).pb(px(6.)).child(
                     div()
@@ -135,7 +146,9 @@ impl AgentIdeApp {
                         .child("+ 新建")
                         .on_mouse_down(
                             MouseButton::Left,
-                            cx.listener(|this, _ev: &MouseDownEvent, _w, cx| this.make_checkpoint(cx)),
+                            cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                                this.make_checkpoint(cx)
+                            }),
                         ),
                 ),
             )
@@ -176,9 +189,16 @@ impl AgentIdeApp {
                     ))
                     .child(info_row(
                         "状态",
-                        if run_id.is_some() { "运行中".into() } else { "空闲".into() },
+                        if run_id.is_some() {
+                            "运行中".into()
+                        } else {
+                            "空闲".into()
+                        },
                     ))
-                    .child(info_row("Run", run_id.clone().unwrap_or_else(|| "—".into())))
+                    .child(info_row(
+                        "Run",
+                        run_id.clone().unwrap_or_else(|| "—".into()),
+                    ))
                     .child(info_row(
                         "Context",
                         format!("{:.0}%", self.metrics.context_fill_pct),
@@ -206,7 +226,11 @@ impl AgentIdeApp {
                                     .text_color(if run_id.is_some() { t.text } else { t.text_4 })
                                     .cursor_pointer()
                                     .hover(move |s| s.bg(t.bg_hover))
-                                    .child(icon("pause", 11., if run_id.is_some() { t.text_2 } else { t.text_4 }))
+                                    .child(icon(
+                                        "pause",
+                                        11.,
+                                        if run_id.is_some() { t.text_2 } else { t.text_4 },
+                                    ))
                                     .child("暂停")
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -231,7 +255,11 @@ impl AgentIdeApp {
                                     .text_color(if run_id.is_some() { t.text } else { t.text_4 })
                                     .cursor_pointer()
                                     .hover(move |s| s.bg(t.bg_hover))
-                                    .child(icon("play", 11., if run_id.is_some() { t.text_2 } else { t.text_4 }))
+                                    .child(icon(
+                                        "play",
+                                        11.,
+                                        if run_id.is_some() { t.text_2 } else { t.text_4 },
+                                    ))
                                     .child("恢复")
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -353,7 +381,14 @@ fn render_checkpoints(app: &AgentIdeApp, cx: &mut Context<AgentIdeApp>) -> AnyEl
                 .border_1()
                 .border_color(t.line)
                 .bg(t.bg_panel)
-                .child(div().flex_1().min_w(px(0.)).truncate().text_size(px(12.)).child(label))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .truncate()
+                        .text_size(px(12.))
+                        .child(label),
+                )
                 .child(div().text_size(px(10.)).text_color(t.text_4).child(meta))
                 .child(
                     div()
@@ -426,12 +461,22 @@ fn render_tree_rows(
                         .cursor_pointer()
                         .hover(move |s| s.bg(t.bg_hover))
                         .child(icon(
-                            if expanded { "chevron-down" } else { "chevron-right" },
+                            if expanded {
+                                "chevron-down"
+                            } else {
+                                "chevron-right"
+                            },
                             10.,
                             t.text_4,
                         ))
                         .child(icon("folder", 12., t.text_3))
-                        .child(div().flex_1().min_w(px(0.)).truncate().child(node.name.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .child(node.name.clone()),
+                        )
                         .when_some(badge, |d, b| d.child(b))
                         .on_mouse_down(
                             MouseButton::Left,
@@ -475,7 +520,13 @@ fn render_tree_rows(
                         .hover(move |s| s.bg(t.bg_hover))
                         .child(div().w(px(10.)).flex_none())
                         .child(icon("file", 12., t.text_4))
-                        .child(div().flex_1().min_w(px(0.)).truncate().child(node.name.clone()))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .child(node.name.clone()),
+                        )
                         .when_some(badge, |d, b| d.child(b))
                         .on_mouse_down(
                             MouseButton::Left,

@@ -1,7 +1,9 @@
-//! API layer: business gateway + axum routes + SSE.
+//! API layer: app services container + per-domain handlers + axum routes + SSE.
 
-pub mod gateway;
+pub mod handlers;
+pub mod openapi;
 pub mod routes;
+pub mod services;
 pub mod sse;
 
-pub use gateway::AppServices;
+pub use services::AppServices;

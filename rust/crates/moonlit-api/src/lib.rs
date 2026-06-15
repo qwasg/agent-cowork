@@ -165,7 +165,8 @@ impl MoonlitAgentApi {
     }
 
     async fn delete<T: DeserializeOwned>(&self, path: impl Into<String>) -> Result<T> {
-        self.request(reqwest::Method::DELETE, path.into(), None).await
+        self.request(reqwest::Method::DELETE, path.into(), None)
+            .await
     }
 
     pub async fn health(&self) -> Result<Value> {
@@ -225,6 +226,7 @@ impl MoonlitAgentApi {
     pub async fn create_session(
         &self,
         title: Option<&str>,
+        agent_kind: &str,
         selected_model_id: Option<&str>,
         web_search_enabled: bool,
     ) -> Result<Value> {
@@ -232,6 +234,7 @@ impl MoonlitAgentApi {
             "/api/agent-debug/sessions",
             json!({
                 "title": title,
+                "agentKind": agent_kind,
                 "selectedModelId": selected_model_id,
                 "webSearchEnabled": web_search_enabled
             }),
@@ -307,7 +310,10 @@ impl MoonlitAgentApi {
         context_window: Option<Value>,
     ) -> Result<Value> {
         self.post(
-            format!("/api/agent-debug/sessions/{}/plan:generate", enc(session_id)),
+            format!(
+                "/api/agent-debug/sessions/{}/plan:generate",
+                enc(session_id)
+            ),
             json!({ "userInput": user_input, "contextWindow": context_window }),
         )
         .await
@@ -433,8 +439,11 @@ impl MoonlitAgentApi {
     }
 
     pub async fn browse_directories(&self, path: &str) -> Result<Value> {
-        self.get(format!("/api/agent-debug/workspace/browse?path={}", enc(path)))
-            .await
+        self.get(format!(
+            "/api/agent-debug/workspace/browse?path={}",
+            enc(path)
+        ))
+        .await
     }
 
     pub async fn set_workspace_root(&self, path: &str) -> Result<Value> {
@@ -443,14 +452,33 @@ impl MoonlitAgentApi {
     }
 
     pub async fn read_workspace_file(&self, path: &str) -> Result<Value> {
-        self.get(format!("/api/agent-debug/workspace/file?path={}", enc(path)))
-            .await
+        self.get(format!(
+            "/api/agent-debug/workspace/file?path={}",
+            enc(path)
+        ))
+        .await
     }
 
     pub async fn write_workspace_file(&self, path: &str, content: &str) -> Result<Value> {
         self.post(
             "/api/agent-debug/workspace/file",
             json!({ "path": path, "content": content }),
+        )
+        .await
+    }
+
+    pub async fn read_workspace_document(&self, path: &str) -> Result<Value> {
+        self.get(format!(
+            "/api/agent-debug/workspace/document?path={}",
+            enc(path)
+        ))
+        .await
+    }
+
+    pub async fn write_workspace_document(&self, path: &str, ir: &Value) -> Result<Value> {
+        self.put(
+            "/api/agent-debug/workspace/document",
+            json!({ "path": path, "ir": ir }),
         )
         .await
     }
@@ -491,13 +519,39 @@ impl MoonlitAgentApi {
 
     pub async fn discard_proposal(&self, proposal_id: &str) -> Result<Value> {
         self.post(
-            format!(
-                "/api/agent-debug/proposals/{}:discard",
-                enc(proposal_id)
-            ),
+            format!("/api/agent-debug/proposals/{}:discard", enc(proposal_id)),
             json!({}),
         )
         .await
+    }
+
+    // ---- long-term memory ----
+
+    pub async fn list_memories(&self, scope: Option<&str>) -> Result<Value> {
+        let path = match scope.filter(|s| !s.is_empty()) {
+            Some(s) => format!("/api/agent-debug/memories?scope={}", enc(s)),
+            None => "/api/agent-debug/memories".to_string(),
+        };
+        self.get(path).await
+    }
+
+    pub async fn create_memory(
+        &self,
+        content: &str,
+        kind: &str,
+        scope: &str,
+        tags: Vec<String>,
+    ) -> Result<Value> {
+        self.post(
+            "/api/agent-debug/memories",
+            json!({ "content": content, "kind": kind, "scope": scope, "tags": tags }),
+        )
+        .await
+    }
+
+    pub async fn delete_memory(&self, memory_id: &str) -> Result<Value> {
+        self.delete(format!("/api/agent-debug/memories/{}", enc(memory_id)))
+            .await
     }
 
     pub async fn passthrough_get(&self, path: &str) -> Result<Value> {
@@ -519,7 +573,8 @@ impl MoonlitAgentApi {
     }
 
     pub async fn fetch_channel_models(&self, payload: Value) -> Result<Value> {
-        self.post("/api/agent-debug/channels:fetch-models", payload).await
+        self.post("/api/agent-debug/channels:fetch-models", payload)
+            .await
     }
 
     pub async fn create_channel(&self, channel: Value) -> Result<Value> {
@@ -527,8 +582,11 @@ impl MoonlitAgentApi {
     }
 
     pub async fn update_channel(&self, channel_id: &str, channel: Value) -> Result<Value> {
-        self.put(format!("/api/agent-debug/channels/{}", enc(channel_id)), channel)
-            .await
+        self.put(
+            format!("/api/agent-debug/channels/{}", enc(channel_id)),
+            channel,
+        )
+        .await
     }
 
     pub async fn delete_channel(&self, channel_id: &str) -> Result<Value> {
@@ -543,7 +601,8 @@ impl MoonlitAgentApi {
     }
 
     pub async fn read_skill(&self, name: &str) -> Result<Value> {
-        self.get(format!("/api/agent-debug/skills/{}", enc(name))).await
+        self.get(format!("/api/agent-debug/skills/{}", enc(name)))
+            .await
     }
 
     // -------------------- 权限模式 --------------------
@@ -571,6 +630,50 @@ impl MoonlitAgentApi {
         self.get("/api/agent-debug/subagents").await
     }
 
+    /// Resolve a pending interactive tool-permission request.
+    pub async fn approve_permission(&self, request_id: &str) -> Result<Value> {
+        self.post(
+            format!("/api/agent-debug/permissions/{}:approve", enc(request_id)),
+            json!({}),
+        )
+        .await
+    }
+
+    pub async fn deny_permission(&self, request_id: &str) -> Result<Value> {
+        self.post(
+            format!("/api/agent-debug/permissions/{}:deny", enc(request_id)),
+            json!({}),
+        )
+        .await
+    }
+
+    // -------------------- 工具 / MCP / Swarm --------------------
+
+    pub async fn list_tools(&self) -> Result<Value> {
+        self.get("/api/agent-debug/tools").await
+    }
+
+    pub async fn mcp_demo_status(&self) -> Result<Value> {
+        self.get("/api/agent-debug/mcp/demo/status").await
+    }
+
+    pub async fn mcp_demo_call(&self, name: &str, arguments: Value) -> Result<Value> {
+        self.post(
+            "/api/agent-debug/mcp/demo/call",
+            json!({ "name": name, "arguments": arguments }),
+        )
+        .await
+    }
+
+    pub async fn swarm_state(&self) -> Result<Value> {
+        self.get("/api/agent-debug/swarm/state").await
+    }
+
+    pub async fn seed_swarm_demo(&self) -> Result<Value> {
+        self.post("/api/agent-debug/swarm/seed-demo", json!({}))
+            .await
+    }
+
     // -------------------- 检查点 --------------------
 
     pub async fn list_checkpoints(&self, session_id: &str) -> Result<Value> {
@@ -588,10 +691,7 @@ impl MoonlitAgentApi {
         label: &str,
     ) -> Result<Value> {
         self.post(
-            format!(
-                "/api/agent-debug/sessions/{}/checkpoints",
-                enc(session_id)
-            ),
+            format!("/api/agent-debug/sessions/{}/checkpoints", enc(session_id)),
             json!({ "paths": paths, "label": label }),
         )
         .await
@@ -599,10 +699,7 @@ impl MoonlitAgentApi {
 
     pub async fn rewind_checkpoint(&self, checkpoint_id: &str) -> Result<Value> {
         self.post(
-            format!(
-                "/api/agent-debug/checkpoints/{}:rewind",
-                enc(checkpoint_id)
-            ),
+            format!("/api/agent-debug/checkpoints/{}:rewind", enc(checkpoint_id)),
             json!({}),
         )
         .await
@@ -665,7 +762,8 @@ impl MoonlitAgentApi {
     }
 
     pub async fn batch_rerun_todos(&self, payload: Value) -> Result<Value> {
-        self.post("/api/agent-debug/todos:batch-rerun", payload).await
+        self.post("/api/agent-debug/todos:batch-rerun", payload)
+            .await
     }
 
     pub fn subscribe_events(&self, req: SubscribeRequest) -> EventSubscription {
@@ -693,59 +791,28 @@ impl MoonlitAgentApi {
             if *shutdown.borrow() {
                 return Ok(());
             }
-            let url = self.ws_url("/ws/agent-debug");
-            match connect_async(url.as_str()).await {
-                Ok((stream, _)) => {
-                    backoff_ms = 500;
-                    let (mut write, mut read) = stream.split();
-                    let subscribe = json!({
-                        "action": "subscribe",
-                        "sessionId": req.session_id,
-                        "fromSeq": last_seq,
-                        "channels": req.channels,
-                        "token": req.static_token,
-                    });
-                    write
-                        .send(Message::Text(subscribe.to_string()))
-                        .await
-                        .map_err(ApiError::WebSocket)?;
-                    loop {
-                        tokio::select! {
-                            _ = shutdown.changed() => {
-                                let _ = write.close().await;
-                                return Ok(());
-                            }
-                            message = read.next() => {
-                                match message {
-                                    Some(Ok(Message::Text(text))) => {
-                                        if let Some(frame) = parse_ws_text(&text)? {
-                                            if let EventFrame::Event(evt) = &frame {
-                                                if let Some(seq) = evt.seq {
-                                                    if seq > last_seq {
-                                                        last_seq = seq;
-                                                    }
-                                                }
-                                            }
-                                            tx.send(frame).await.map_err(|_| ApiError::Send)?;
-                                        }
-                                    }
-                                    Some(Ok(Message::Binary(bytes))) => {
-                                        if let Ok(text) = String::from_utf8(bytes) {
-                                            if let Some(frame) = parse_ws_text(&text)? {
-                                                tx.send(frame).await.map_err(|_| ApiError::Send)?;
-                                            }
-                                        }
-                                    }
-                                    Some(Ok(Message::Close(_))) | None => break,
-                                    Some(Ok(_)) => {}
-                                    Some(Err(err)) => return Err(ApiError::WebSocket(err)),
-                                }
-                            }
-                        }
+
+            let ws_result = self
+                .event_loop_ws_once(&req, &tx, &mut shutdown, &mut last_seq)
+                .await;
+            if ws_result.is_ok() {
+                backoff_ms = 500;
+            } else {
+                // Direct Rust-core connections expose SSE but not the Go
+                // gateway's `/ws/agent-debug`. Fall back so chat still streams.
+                match self
+                    .event_loop_sse_once(&req, &tx, &mut shutdown, &mut last_seq)
+                    .await
+                {
+                    Ok(()) => backoff_ms = 500,
+                    Err(sse_err) => {
+                        let ws_err = ws_result.err().map(|e| e.to_string()).unwrap_or_default();
+                        let _ = tx
+                            .send(EventFrame::TransportError(format!(
+                                "event subscription failed (ws: {ws_err}; sse: {sse_err})"
+                            )))
+                            .await;
                     }
-                }
-                Err(err) => {
-                    let _ = tx.send(EventFrame::TransportError(err.to_string())).await;
                 }
             }
             tokio::select! {
@@ -753,6 +820,102 @@ impl MoonlitAgentApi {
                 _ = tokio::time::sleep(Duration::from_millis(backoff_ms.min(10_000))) => {}
             }
             backoff_ms = ((backoff_ms as f64) * 1.7).round().min(10_000.0) as u64;
+        }
+    }
+
+    async fn event_loop_ws_once(
+        &self,
+        req: &SubscribeRequest,
+        tx: &mpsc::Sender<EventFrame>,
+        shutdown: &mut watch::Receiver<bool>,
+        last_seq: &mut u64,
+    ) -> Result<()> {
+        let url = self.ws_url("/ws/agent-debug");
+        let (stream, _) = connect_async(url.as_str()).await?;
+        let (mut write, mut read) = stream.split();
+        let subscribe = json!({
+            "action": "subscribe",
+            "sessionId": req.session_id,
+            "fromSeq": *last_seq,
+            "channels": req.channels,
+            "token": req.static_token,
+        });
+        write
+            .send(Message::Text(subscribe.to_string()))
+            .await
+            .map_err(ApiError::WebSocket)?;
+
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    let _ = write.close().await;
+                    return Ok(());
+                }
+                message = read.next() => {
+                    match message {
+                        Some(Ok(Message::Text(text))) => {
+                            if let Some(frame) = parse_ws_text(&text)? {
+                                update_last_seq(&frame, last_seq);
+                                tx.send(frame).await.map_err(|_| ApiError::Send)?;
+                            }
+                        }
+                        Some(Ok(Message::Binary(bytes))) => {
+                            if let Ok(text) = String::from_utf8(bytes) {
+                                if let Some(frame) = parse_ws_text(&text)? {
+                                    update_last_seq(&frame, last_seq);
+                                    tx.send(frame).await.map_err(|_| ApiError::Send)?;
+                                }
+                            }
+                        }
+                        Some(Ok(Message::Close(_))) | None => return Ok(()),
+                        Some(Ok(_)) => {}
+                        Some(Err(err)) => return Err(ApiError::WebSocket(err)),
+                    }
+                }
+            }
+        }
+    }
+
+    async fn event_loop_sse_once(
+        &self,
+        req: &SubscribeRequest,
+        tx: &mpsc::Sender<EventFrame>,
+        shutdown: &mut watch::Receiver<bool>,
+        last_seq: &mut u64,
+    ) -> Result<()> {
+        let path = format!(
+            "/api/agent-debug/sessions/{}/events/stream?fromSeq={}",
+            enc(&req.session_id),
+            *last_seq
+        );
+        let url = format!("{}{}", self.base_url, path);
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        if let Some(token) = &self.auth_token {
+            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
+                headers.insert(AUTHORIZATION, value);
+            }
+        }
+        let response = self.client.get(url).headers(headers).send().await?;
+        let mut stream = response.error_for_status()?.bytes_stream();
+        let mut buffer = String::new();
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => return Ok(()),
+                chunk = stream.next() => {
+                    let Some(chunk) = chunk else { return Ok(()); };
+                    let chunk = chunk?;
+                    buffer.push_str(&String::from_utf8_lossy(&chunk));
+                    while let Some(idx) = buffer.find("\n\n") {
+                        let frame_text = buffer[..idx].to_string();
+                        buffer = buffer[idx + 2..].to_string();
+                        if let Some(frame) = parse_sse_event_frame(&frame_text)? {
+                            update_last_seq(&frame, last_seq);
+                            tx.send(frame).await.map_err(|_| ApiError::Send)?;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -774,7 +937,13 @@ impl MoonlitAgentApi {
                 headers.insert(AUTHORIZATION, value);
             }
         }
-        let mut stream = self.client.get(url).headers(headers).send().await?.bytes_stream();
+        let mut stream = self
+            .client
+            .get(url)
+            .headers(headers)
+            .send()
+            .await?
+            .bytes_stream();
         let mut buffer = String::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -830,7 +999,10 @@ pub enum EventFrame {
 
 fn parse_ws_text(text: &str) -> Result<Option<EventFrame>> {
     let value: Value = serde_json::from_str(text)?;
-    let frame_type = value.get("type").and_then(Value::as_str).unwrap_or_default();
+    let frame_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     match frame_type {
         "ws.subscribed" => Ok(Some(EventFrame::Subscribed {
             session_id: value
@@ -846,7 +1018,34 @@ fn parse_ws_text(text: &str) -> Result<Option<EventFrame>> {
     }
 }
 
+fn update_last_seq(frame: &EventFrame, last_seq: &mut u64) {
+    if let EventFrame::Event(evt) = frame {
+        if let Some(seq) = evt.seq {
+            if seq > *last_seq {
+                *last_seq = seq;
+            }
+        }
+    }
+}
+
+fn parse_sse_event_frame(frame: &str) -> Result<Option<EventFrame>> {
+    let Some(value) = parse_sse_data_value(frame)? else {
+        return Ok(None);
+    };
+    if value.get("type").and_then(Value::as_str) == Some("stream.gap") {
+        return Ok(Some(EventFrame::ReplayGap(value)));
+    }
+    Ok(Some(EventFrame::Event(serde_json::from_value(value)?)))
+}
+
 fn parse_sse_frame(frame: &str) -> Result<Option<DebugEvent>> {
+    let Some(value) = parse_sse_data_value(frame)? else {
+        return Ok(None);
+    };
+    Ok(Some(serde_json::from_value(value)?))
+}
+
+fn parse_sse_data_value(frame: &str) -> Result<Option<Value>> {
     if frame.trim().is_empty() || frame.trim_start().starts_with(':') {
         return Ok(None);
     }
@@ -946,5 +1145,36 @@ mod tests {
         .unwrap();
         assert_eq!(evt.seq, Some(1));
         assert_eq!(evt.payload_str("delta"), Some("x"));
+    }
+
+    #[test]
+    fn parse_sse_gap_frame() {
+        let frame = parse_sse_event_frame(
+            "event: stream.gap\ndata: {\"sessionId\":\"s\",\"type\":\"stream.gap\",\"payload\":{\"gap\":true,\"reason\":\"subscriber-lagged\"}}\n",
+        )
+        .unwrap()
+        .unwrap();
+        match frame {
+            EventFrame::ReplayGap(value) => {
+                assert_eq!(value["payload"]["reason"], "subscriber-lagged");
+            }
+            _ => panic!("unexpected"),
+        }
+    }
+
+    #[test]
+    fn update_last_seq_tracks_event_frames_only() {
+        let mut last_seq = 7;
+        let frame = parse_ws_text(r#"{"seq":9,"type":"agent.started","payload":{"runId":"r1"}}"#)
+            .unwrap()
+            .unwrap();
+        update_last_seq(&frame, &mut last_seq);
+        assert_eq!(last_seq, 9);
+
+        let frame = parse_ws_text(r#"{"type":"ws.subscribed","sessionId":"s","latestSeq":12}"#)
+            .unwrap()
+            .unwrap();
+        update_last_seq(&frame, &mut last_seq);
+        assert_eq!(last_seq, 9);
     }
 }

@@ -17,9 +17,19 @@ server-err.log
 
 # ---- secrets / credentials (never commit) ----
 .agent_master.key
+.agent_auth_secret
 agent_credentials.json
 agent_channels.json
 agent_users.json
 agent_search_config.json
+agentd.redb
+mcp.json
 .env
 .env.local
+
+# ---- binaries / vendored snapshots ----
+*.exe
+out-simple/
+
+# ---- extra rust build dirs ----
+rust/target-*/

@@ -17,13 +17,15 @@ use std::time::Duration;
 
 use tokio::sync::broadcast;
 
-use crate::contracts::events::{DebugEvent, EventDraft};
-use crate::contracts::models::{new_id, now_ts};
-use crate::infra::jsonl::JsonlStore;
+use crate::jsonl::JsonlStore;
+use agent_protocol::events::{DebugEvent, EventDraft};
+use agent_protocol::models::{new_id, now_ts};
 
 enum LogOp {
     Append(String, DebugEvent),
     Delete(String),
+    /// Keep only events with `seq <= max_seq` in the durable log.
+    Truncate(String, i64),
     Flush(mpsc::Sender<()>),
 }
 
@@ -43,7 +45,17 @@ pub struct EventBus {
 
 impl EventBus {
     pub fn new(cap: Option<usize>, jsonl: Option<Arc<JsonlStore>>) -> Arc<Self> {
-        let (tx, _rx) = broadcast::channel(4096);
+        Self::with_broadcast_cap(cap, 4096, jsonl)
+    }
+
+    /// `broadcast_cap` bounds the live fan-out channel; slow SSE consumers
+    /// past that lag get a `stream.gap` instead of blocking publishers.
+    pub fn with_broadcast_cap(
+        cap: Option<usize>,
+        broadcast_cap: usize,
+        jsonl: Option<Arc<JsonlStore>>,
+    ) -> Arc<Self> {
+        let (tx, _rx) = broadcast::channel(broadcast_cap.max(64));
         let log_tx = jsonl.as_ref().map(|store| {
             let store = store.clone();
             let (log_tx, log_rx) = mpsc::channel::<LogOp>();
@@ -58,6 +70,9 @@ impl EventBus {
                                 store.append(&session_id, &event);
                             }
                             LogOp::Delete(session_id) => store.delete_session(&session_id),
+                            LogOp::Truncate(session_id, max_seq) => {
+                                store.truncate_after_seq(&session_id, max_seq)
+                            }
                             LogOp::Flush(ack) => {
                                 let _ = ack.send(());
                             }
@@ -114,16 +129,11 @@ impl EventBus {
             .cap
             .map(|c| events.len().saturating_sub(c))
             .unwrap_or(0);
-        let bucket = inner
-            .per_session
-            .entry(session_id.to_string())
-            .or_default();
+        let bucket = inner.per_session.entry(session_id.to_string()).or_default();
         for ev in events.into_iter().skip(skip) {
             bucket.push_back(ev);
         }
-        inner
-            .seq_by_session
-            .insert(session_id.to_string(), max_seq);
+        inner.seq_by_session.insert(session_id.to_string(), max_seq);
     }
 
     pub fn next_seq(&self, session_id: &str) -> i64 {
@@ -278,7 +288,102 @@ impl EventBus {
         inner.hydrated.insert(session_id.to_string());
         drop(inner);
         if let Some(log_tx) = &self.log_tx {
-            let _ = log_tx.send(LogOp::Delete(session_id.to_string()));
+            if log_tx.send(LogOp::Delete(session_id.to_string())).is_err() {
+                tracing::warn!("event_bus: log writer gone, session {session_id} file not deleted");
+            }
+        }
+    }
+
+    /// Copy a session's whole event history into another session, re-assigning
+    /// ids/seq for the destination (port of Python `EventBus.fork_session`).
+    pub fn fork_session(&self, old_session_id: &str, new_session_id: &str) {
+        let events = self.snapshot(old_session_id);
+        for mut ev in events {
+            ev.id = new_id("evt");
+            ev.session_id = new_session_id.to_string();
+            ev.seq = self.next_seq(new_session_id);
+            self.publish_inner(ev, true);
+        }
+    }
+
+    /// Keep events up to *and including* the one with `event_id` (port of
+    /// Python `truncate_session`). No-op when the event isn't buffered.
+    pub fn truncate_session(&self, session_id: &str, event_id: &str) {
+        let target_seq = {
+            self.ensure_hydrated(session_id);
+            let inner = self.inner.lock().unwrap();
+            inner
+                .per_session
+                .get(session_id)
+                .and_then(|b| b.iter().find(|e| e.id == event_id).map(|e| e.seq))
+        };
+        if let Some(seq) = target_seq {
+            self.truncate_to_seq(session_id, seq);
+        }
+    }
+
+    /// Truncate to *before* the target event (exclusive; used by "edit &
+    /// resend"). When the target belongs to a run, rewind to before that
+    /// run's earliest event so leading `agent.started` events go too.
+    pub fn truncate_before_event(&self, session_id: &str, event_id: &str) {
+        let cutoff = {
+            self.ensure_hydrated(session_id);
+            let inner = self.inner.lock().unwrap();
+            let Some(bucket) = inner.per_session.get(session_id) else {
+                return;
+            };
+            let Some(target) = bucket.iter().find(|e| e.id == event_id) else {
+                return;
+            };
+            let run_id = target
+                .payload
+                .get("runId")
+                .or_else(|| target.payload.get("run_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| target.correlation_id.clone());
+            let mut cutoff_seq = target.seq;
+            if let Some(rid) = run_id {
+                for ev in bucket.iter() {
+                    let ev_run = ev
+                        .payload
+                        .get("runId")
+                        .or_else(|| ev.payload.get("run_id"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| ev.correlation_id.clone());
+                    if ev_run.as_deref() == Some(rid.as_str()) {
+                        cutoff_seq = cutoff_seq.min(ev.seq);
+                    }
+                }
+            }
+            cutoff_seq - 1
+        };
+        self.truncate_to_seq(session_id, cutoff);
+    }
+
+    /// Keep only events with `seq <= max_seq` (memory + durable log) and
+    /// rewind the session's seq counter (used by checkpoint rewind).
+    pub fn truncate_to_seq(&self, session_id: &str, max_seq: i64) {
+        self.ensure_hydrated(session_id);
+        {
+            let mut inner = self.inner.lock().unwrap();
+            if let Some(bucket) = inner.per_session.get_mut(session_id) {
+                bucket.retain(|e| e.seq <= max_seq);
+            }
+            inner
+                .seq_by_session
+                .insert(session_id.to_string(), max_seq.max(0));
+        }
+        if let Some(log_tx) = &self.log_tx {
+            if log_tx
+                .send(LogOp::Truncate(session_id.to_string(), max_seq))
+                .is_err()
+            {
+                tracing::warn!(
+                    "event_bus: log writer gone, session {session_id} not truncated on disk"
+                );
+            }
         }
     }
 
@@ -337,7 +442,7 @@ mod tests {
     fn rehydrates_from_jsonl_and_continues_seq() {
         let dir = std::env::temp_dir().join(format!(
             "agentd_bus_test_{}",
-            crate::contracts::models::new_id("d")
+            agent_protocol::models::new_id("d")
         ));
         let sid = "sess_hydrate";
         {

@@ -1,0 +1,9 @@
+[package]
+name = "agent-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Typed environment configuration for the Agent Debug backend"
+
+[dependencies]
+dotenvy = { workspace = true }

@@ -3,9 +3,9 @@
 
 use async_trait::async_trait;
 
-use crate::contracts::ApiResult;
-use crate::provider::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent};
-use crate::provider::LLMProvider;
+use crate::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent};
+use crate::LLMProvider;
+use agent_protocol::ApiResult;
 
 pub struct MockProvider {
     name: String,

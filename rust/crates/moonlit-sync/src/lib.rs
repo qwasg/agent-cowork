@@ -82,14 +82,16 @@ impl SyncServer {
     }
 
     pub async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
-        let room_slot: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let room_slot: Arc<std::sync::Mutex<Option<String>>> =
+            Arc::new(std::sync::Mutex::new(None));
         let room_capture = room_slot.clone();
-        let ws = tokio_tungstenite::accept_hdr_async(stream, move |req: &Request, resp: Response| {
-            let room = room_from_uri(req.uri().path());
-            *room_capture.lock().unwrap() = Some(room);
-            Ok(resp)
-        })
-        .await?;
+        let ws =
+            tokio_tungstenite::accept_hdr_async(stream, move |req: &Request, resp: Response| {
+                let room = room_from_uri(req.uri().path());
+                *room_capture.lock().unwrap() = Some(room);
+                Ok(resp)
+            })
+            .await?;
         let room = room_slot
             .lock()
             .unwrap()
@@ -98,7 +100,11 @@ impl SyncServer {
         self.run_socket(room, ws).await
     }
 
-    async fn run_socket<S>(&self, room: String, ws: tokio_tungstenite::WebSocketStream<S>) -> Result<()>
+    async fn run_socket<S>(
+        &self,
+        room: String,
+        ws: tokio_tungstenite::WebSocketStream<S>,
+    ) -> Result<()>
     where
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     {

@@ -103,8 +103,9 @@ pub struct Channel {
     pub label: String,
     #[serde(default)]
     pub base_url: String,
-    /// Stored as `enc:...` ciphertext; never serialized back to clients in clear.
-    #[serde(default, skip_serializing)]
+    /// Stored as `enc:...` ciphertext. Public API responses must be projected
+    /// through the gateway so this encrypted value is never sent to clients.
+    #[serde(default)]
     pub api_key_enc: String,
     #[serde(default)]
     pub models: Vec<ChannelModel>,

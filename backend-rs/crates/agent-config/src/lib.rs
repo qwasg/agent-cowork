@@ -47,6 +47,8 @@ pub struct Config {
     pub session_dir: PathBuf,
     pub workspace_root: PathBuf,
     pub event_buffer_cap: Option<usize>,
+    /// `tokio::broadcast` channel capacity for live event fan-out.
+    pub event_broadcast_cap: usize,
     pub persist_events: bool,
     pub parallel_limit: usize,
     /// Max concurrent `edit`-kind todos in plan execution (default 1: edits
@@ -55,6 +57,19 @@ pub struct Config {
     pub edit_parallel: usize,
     pub tool_loop_steps: usize,
     pub repeated_tool_limit: usize,
+    /// Max nesting depth for `task` subagents (1 = no nested subagents).
+    pub subagent_max_depth: usize,
+    /// Consecutive all-failed tool steps tolerated before the loop injects a
+    /// strategy-change reminder (one more such step stops the run).
+    pub empty_progress_limit: usize,
+    /// Tool output truncation: char cap before spilling to disk.
+    pub tool_output_max_chars: usize,
+    /// Tool output truncation: line cap before spilling to disk.
+    pub tool_output_max_lines: usize,
+    /// Plan executor: retries per failed todo (0 = no retry).
+    pub todo_retry_limit: usize,
+    /// Plan executor: per-todo wall-clock timeout in seconds (0 = none).
+    pub todo_timeout_secs: u64,
     pub stream: bool,
     pub history_turns: usize,
     /// Total per-request timeout for LLM provider HTTP calls (seconds).
@@ -111,6 +126,7 @@ impl Config {
             session_dir,
             workspace_root,
             event_buffer_cap,
+            event_broadcast_cap: env_usize("AGENT_DEBUG_EVENT_BROADCAST", 4096).max(64),
             persist_events: env_opt("AGENT_DEBUG_PERSIST_EVENTS")
                 .map(|v| v != "0" && v != "false")
                 .unwrap_or(true),
@@ -118,6 +134,13 @@ impl Config {
             edit_parallel: env_usize("AGENT_DEBUG_EDIT_PARALLEL", 1).max(1),
             tool_loop_steps: env_usize("AGENT_DEBUG_TOOL_LOOP_STEPS", 24),
             repeated_tool_limit: env_usize("AGENT_DEBUG_REPEATED_TOOL_LIMIT", 8).max(1),
+            subagent_max_depth: env_usize("AGENT_DEBUG_SUBAGENT_MAX_DEPTH", 1).max(1),
+            empty_progress_limit: env_usize("AGENT_DEBUG_EMPTY_PROGRESS_LIMIT", 3).max(1),
+            tool_output_max_chars: env_usize("AGENT_DEBUG_TOOL_OUTPUT_MAX_CHARS", 20_000)
+                .max(1_000),
+            tool_output_max_lines: env_usize("AGENT_DEBUG_TOOL_OUTPUT_MAX_LINES", 400).max(50),
+            todo_retry_limit: env_usize("AGENT_DEBUG_TODO_RETRY_LIMIT", 1),
+            todo_timeout_secs: env_u64("AGENT_DEBUG_TODO_TIMEOUT_SECS", 900),
             stream: env_opt("AGENT_DEBUG_STREAM")
                 .map(|v| v != "0")
                 .unwrap_or(true),

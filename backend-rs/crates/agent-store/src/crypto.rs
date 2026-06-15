@@ -68,9 +68,7 @@ impl CryptoStore {
         match self.cipher.decrypt(nonce, ct) {
             Ok(pt) => String::from_utf8_lossy(&pt).to_string(),
             Err(_) => {
-                tracing::warn!(
-                    "crypto: decryption failed (master key changed or data corrupted)"
-                );
+                tracing::warn!("crypto: decryption failed (master key changed or data corrupted)");
                 String::new()
             }
         }
@@ -92,6 +90,13 @@ fn load_or_create_key(path: &PathBuf) -> [u8; 32] {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(path, B64.encode(key));
+    if let Err(e) = std::fs::write(path, B64.encode(key)) {
+        // Secrets encrypted with an in-memory key become unreadable after a
+        // restart; make that failure loud.
+        tracing::warn!(
+            "crypto: failed to persist master key to {}: {e}",
+            path.display()
+        );
+    }
     key
 }

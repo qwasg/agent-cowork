@@ -7,13 +7,14 @@ pub mod google;
 pub mod mock;
 pub mod openai;
 pub mod service;
+pub mod thinking;
 pub mod tokens;
 pub mod types;
 
 use async_trait::async_trait;
 
-use crate::contracts::ApiResult;
-use crate::provider::types::{DeltaSink, ProviderRequest, ProviderResponse};
+use crate::types::{DeltaSink, ProviderRequest, ProviderResponse};
+use agent_protocol::ApiResult;
 
 #[async_trait]
 pub trait LLMProvider: Send + Sync {

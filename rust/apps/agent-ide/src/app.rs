@@ -8,7 +8,7 @@
 use futures_util::StreamExt;
 use gpui::{
     div, prelude::*, px, App, Application, Bounds, Context, Entity, FocusHandle, Focusable,
-    SharedString, Window, WindowBounds, WindowOptions,
+    SharedString, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use moonlit_api::{EventFrame, MoonlitAgentApi, SubscribeRequest};
 use moonlit_core::models::{DebugSession, DesignSnapshot};
@@ -19,15 +19,29 @@ use moonlit_uikit::{
 };
 
 use crate::ui::pane_divider;
-use crate::{AgentIdeState, ChatRole, ComposerMode, ProposalView, TabKind, WorkspaceNode, WorkspaceNodeKind};
+use crate::{
+    AgentIdeState, ChatRole, ComposerMode, ProposalView, TabKind, WorkspaceNode, WorkspaceNodeKind,
+};
 
 /// Tokio runtime handle, set by `main` before the GPUI loop starts.
 pub static RUNTIME: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
 
 gpui::actions!(
     agent_ide,
-    [TogglePalette, NewSessionAction, ToggleBottomAction, CloseOverlays, SaveFileAction]
+    [
+        TogglePalette,
+        NewSessionAction,
+        ToggleBottomAction,
+        CloseOverlays,
+        SaveFileAction
+    ]
 );
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContextApplyTarget {
+    Composer,
+    EditMessage,
+}
 
 /// Cross-thread message from background API tasks to the UI.
 pub(crate) enum AppMsg {
@@ -36,12 +50,37 @@ pub(crate) enum AppMsg {
     Event(moonlit_core::models::DebugEvent),
     SessionCreated(DebugSession),
     Status(String),
-    Provider { mode: String, model: String },
-    Tree { branch: Option<String>, nodes: Vec<WorkspaceNode> },
-    FileLoaded { path: String, content: String },
+    Provider {
+        mode: String,
+        model: String,
+    },
+    Tree {
+        branch: Option<String>,
+        nodes: Vec<WorkspaceNode>,
+    },
+    FileLoaded {
+        path: String,
+        content: String,
+    },
+    DocumentLoaded {
+        path: String,
+        ir: serde_json::Value,
+    },
+    /// Read-only extracted text for a non-editable document (PDF).
+    DocumentTextLoaded {
+        path: String,
+        text: String,
+    },
+    DocumentFailed {
+        path: String,
+        message: String,
+    },
     Models(Vec<moonlit_core::models::AgentModelOption>),
     Readme(Option<String>),
-    TreeChildren { parent: String, nodes: Vec<WorkspaceNode> },
+    TreeChildren {
+        parent: String,
+        nodes: Vec<WorkspaceNode>,
+    },
     LoggedIn(Box<moonlit_core::models::AuthResponse>),
     LoginFailed(String),
     // ---- settings ----
@@ -55,7 +94,10 @@ pub(crate) enum AppMsg {
     },
     /// Generic settings toast (ok / error tone).
     SettingsToast(String, bool),
-    Channels { providers: Vec<serde_json::Value>, channels: Vec<serde_json::Value> },
+    Channels {
+        providers: Vec<serde_json::Value>,
+        channels: Vec<serde_json::Value>,
+    },
     ChannelsList(Vec<serde_json::Value>),
     /// Channel form saved: refreshed list (clears the draft) or error string.
     ChannelSaved(Result<Vec<serde_json::Value>, String>),
@@ -64,7 +106,12 @@ pub(crate) enum AppMsg {
     Tavily(Box<TavilyDraft>),
     TavilySaved(Result<Box<TavilyDraft>, String>),
     Skills(Vec<serde_json::Value>),
-    SkillContent { name: String, content: String },
+    SkillContent {
+        name: String,
+        content: String,
+    },
+    /// Long-term memory list (settings 记忆 page).
+    MemoriesLoaded(Vec<serde_json::Value>),
     // ---- live workbench refetch results ----
     /// Plan bundle refetched after a `plan.*` event.
     PlanBundle(Option<serde_json::Value>),
@@ -106,7 +153,9 @@ fn proposals_to_views(
     for p in proposals {
         for c in &p.changes {
             views.push(ProposalView::new(
-                c.change_id.clone().unwrap_or_else(|| format!("{}:{}", p.id, c.path)),
+                c.change_id
+                    .clone()
+                    .unwrap_or_else(|| format!("{}:{}", p.id, c.path)),
                 c.path.clone(),
                 p.summary.clone(),
                 &c.original_content,
@@ -126,6 +175,59 @@ fn parse_session_response(value: serde_json::Value) -> Result<DebugSession, Stri
         return Err("会话响应缺少 session.id".into());
     }
     Ok(session)
+}
+
+fn provider_status_tuple(status: &serde_json::Value) -> (String, String) {
+    let mode = status
+        .get("mode")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if status
+                .get("hasRealProvider")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                "live".to_string()
+            } else if status
+                .get("providers")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().any(|p| p.as_str() == Some("mock")))
+                .unwrap_or(false)
+            {
+                "mock".to_string()
+            } else {
+                "offline".to_string()
+            }
+        });
+    let model = status
+        .get("openaiCompatible")
+        .and_then(|v| v.get("model"))
+        .and_then(|v| v.as_str())
+        .or_else(|| status.get("defaultModelId").and_then(|v| v.as_str()))
+        .or_else(|| {
+            status
+                .get("providers")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.iter().find_map(|p| p.as_str()))
+        })
+        .unwrap_or("default")
+        .to_string();
+    (mode, model)
+}
+
+fn parse_model_options(value: &serde_json::Value) -> Vec<moonlit_core::models::AgentModelOption> {
+    value
+        .get("models")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    serde_json::from_value::<moonlit_core::models::AgentModelOption>(m.clone()).ok()
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 /// Draft for the channel form (模型页), mirroring `channelToDraft`.
@@ -198,6 +300,11 @@ pub fn run(api: MoonlitAgentApi) {
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Moonlit Agent".into()),
+                        appears_transparent: true,
+                        ..Default::default()
+                    }),
                     ..Default::default()
                 },
                 |window, cx| cx.new(|cx| AgentIdeApp::new(api.clone(), window, cx)),
@@ -219,6 +326,12 @@ pub fn run(api: MoonlitAgentApi) {
 
 pub struct AgentIdeApp {
     pub(crate) focus_handle: FocusHandle,
+    /// Embedded DocForge editor view, rendered in the `docforge` workbench tab.
+    pub(crate) docforge: Entity<moonlit_docforge::app::DocForgeApp>,
+    /// Per-workspace-file DocForge editors (`doc:<path>` tabs).
+    pub(crate) document_editors: std::collections::HashMap<String, Entity<moonlit_docforge::app::DocForgeApp>>,
+    /// Read-only extracted text for non-editable documents (PDF) in `doc:` tabs.
+    pub(crate) document_previews: std::collections::HashMap<String, String>,
     pub(crate) api: MoonlitAgentApi,
     pub(crate) store: Option<ConfigStore>,
     pub(crate) state: AgentIdeState,
@@ -231,6 +344,9 @@ pub struct AgentIdeApp {
     pub(crate) sidebar_search: Entity<TextInput>,
     pub(crate) ws_search: Entity<TextInput>,
     pub(crate) mode: ComposerMode,
+    /// Agent profile used when creating the next session (and reflecting the
+    /// active session's kind). General / Document / Coding.
+    pub(crate) agent_kind: crate::AgentKind,
     pub(crate) status: SharedString,
     pub(crate) connected: bool,
     /// Active workbench tab: plan / todo / diff / swarm / readme / file:<path>.
@@ -262,14 +378,23 @@ pub struct AgentIdeApp {
     /// Per-block expand override (key `msg_id:block_idx`); default follows
     /// the legacy rule "expanded = isLast".
     pub(crate) expanded_blocks: std::collections::HashMap<String, bool>,
-    /// Long assistant texts expanded past the 140px collapse.
-    pub(crate) expanded_msgs: std::collections::HashSet<String>,
+    /// Final assistant texts the user manually collapsed. Final summaries are
+    /// expanded by default because they are the deliverable.
+    pub(crate) collapsed_msgs: std::collections::HashSet<String>,
     /// Block id of the subagent shown in the half-cover overlay.
     pub(crate) subagent_overlay: Option<String>,
     pub(crate) add_menu_open: bool,
     pub(crate) model_menu_open: bool,
+    pub(crate) skill_menu_open: bool,
+    pub(crate) edit_add_menu_open: bool,
+    pub(crate) edit_model_menu_open: bool,
+    /// Skills toggled in the composer picker for the next outgoing message.
+    pub(crate) selected_skills: std::collections::HashSet<String>,
     pub(crate) models: Vec<moonlit_core::models::AgentModelOption>,
     pub(crate) selected_model: Option<String>,
+    /// Long-term memories (settings 记忆 page) + lazy-load flag.
+    pub(crate) memories: Vec<serde_json::Value>,
+    pub(crate) memories_loaded: bool,
     pub(crate) todo_strip_open: bool,
     pub(crate) renaming_session: Option<String>,
     pub(crate) rename_input: Entity<TextInput>,
@@ -281,6 +406,7 @@ pub struct AgentIdeApp {
     pub(crate) about_open: bool,
     pub(crate) shortcuts_open: bool,
     pub(crate) context_drawer_open: bool,
+    pub(crate) context_apply_target: ContextApplyTarget,
     pub(crate) ctx_filter: &'static str,
     pub(crate) ctx_selected: std::collections::HashSet<String>,
     /// Which titlebar menu dropdown is open ("file"/"edit"/"view"/"help").
@@ -309,7 +435,8 @@ pub struct AgentIdeApp {
     /// Open `set-select` dropdown id — mutually exclusive popups.
     pub(crate) settings_menu: Option<String>,
     /// Slider track geometry `(origin_x, width)` recorded at paint time.
-    pub(crate) slider_geom: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<&'static str, (f32, f32)>>>,
+    pub(crate) slider_geom:
+        std::rc::Rc<std::cell::RefCell<std::collections::HashMap<&'static str, (f32, f32)>>>,
     /// On-demand `TextInput` pool for settings fields, keyed `acct:name` etc.
     pub(crate) settings_inputs: std::collections::HashMap<String, Entity<TextInput>>,
     /// 账户卡 expanded / saving (通用页).
@@ -429,27 +556,33 @@ impl AgentIdeApp {
 
         // Enter or Ctrl+Enter sends depending on the setting (legacy parity);
         // Changed repaints the send/mic toggle.
-        cx.subscribe(&composer, |this: &mut Self, _input, event, cx| match event {
-            TextInputEvent::Submit(_) => {
-                if !this.state.settings.submit_with_ctrl_enter {
-                    this.send(cx);
+        cx.subscribe(
+            &composer,
+            |this: &mut Self, _input, event, cx| match event {
+                TextInputEvent::Submit(_) => {
+                    if !this.state.settings.submit_with_ctrl_enter {
+                        this.send(cx);
+                    }
                 }
-            }
-            TextInputEvent::SubmitCtrl(_) => {
-                if this.state.settings.submit_with_ctrl_enter {
-                    this.send(cx);
+                TextInputEvent::SubmitCtrl(_) => {
+                    if this.state.settings.submit_with_ctrl_enter {
+                        this.send(cx);
+                    }
                 }
-            }
-            TextInputEvent::Changed(_) => cx.notify(),
-        })
+                TextInputEvent::Changed(_) => cx.notify(),
+            },
+        )
         .detach();
         // Inline message editor: Enter / Ctrl+Enter both resend the edit.
-        cx.subscribe(&edit_input, |this: &mut Self, _input, event, cx| match event {
-            TextInputEvent::Submit(_) | TextInputEvent::SubmitCtrl(_) => {
-                this.resend_edited(cx);
-            }
-            TextInputEvent::Changed(_) => cx.notify(),
-        })
+        cx.subscribe(
+            &edit_input,
+            |this: &mut Self, _input, event, cx| match event {
+                TextInputEvent::Submit(_) | TextInputEvent::SubmitCtrl(_) => {
+                    this.resend_edited(cx);
+                }
+                TextInputEvent::Changed(_) => cx.notify(),
+            },
+        )
         .detach();
         cx.subscribe(&sidebar_search, |_this: &mut Self, _input, event, cx| {
             if let TextInputEvent::Changed(_) = event {
@@ -469,15 +602,18 @@ impl AgentIdeApp {
             }
         })
         .detach();
-        cx.subscribe(&palette_input, |this: &mut Self, _input, event, cx| match event {
-            TextInputEvent::Changed(_) => {
-                this.palette_index = 0;
-                cx.notify();
-            }
-            TextInputEvent::Submit(_) | TextInputEvent::SubmitCtrl(_) => {
-                this.run_palette_selection(cx);
-            }
-        })
+        cx.subscribe(
+            &palette_input,
+            |this: &mut Self, _input, event, cx| match event {
+                TextInputEvent::Changed(_) => {
+                    this.palette_index = 0;
+                    cx.notify();
+                }
+                TextInputEvent::Submit(_) | TextInputEvent::SubmitCtrl(_) => {
+                    this.run_palette_selection(cx);
+                }
+            },
+        )
         .detach();
         // Demo terminal: echo commands locally (legacy fake shell).
         cx.subscribe(&term_input, |this: &mut Self, input, event, cx| {
@@ -491,7 +627,8 @@ impl AgentIdeApp {
                     this.term_history.clear();
                 } else {
                     this.term_history.push(format!("workspace ❯ {cmd}"));
-                    this.term_history.push(format!("'{cmd}'：演示终端，仅回显。"));
+                    this.term_history
+                        .push(format!("'{cmd}'：演示终端，仅回显。"));
                 }
                 cx.notify();
             }
@@ -522,8 +659,13 @@ impl AgentIdeApp {
             }
         }
 
+        let docforge = cx.new(moonlit_docforge::app::DocForgeApp::new);
+
         let mut app = Self {
             focus_handle: cx.focus_handle(),
+            docforge,
+            document_editors: Default::default(),
+            document_previews: Default::default(),
             api,
             store,
             state,
@@ -534,6 +676,7 @@ impl AgentIdeApp {
             sidebar_search,
             ws_search,
             mode: ComposerMode::Build,
+            agent_kind: crate::AgentKind::Coding,
             status: "正在连接后端…".into(),
             connected: false,
             // Legacy default: no tabs open, workbench shows the empty hero.
@@ -555,12 +698,18 @@ impl AgentIdeApp {
             readme: None,
             show_all_home: false,
             expanded_blocks: Default::default(),
-            expanded_msgs: Default::default(),
+            collapsed_msgs: Default::default(),
             subagent_overlay: None,
             add_menu_open: false,
             model_menu_open: false,
+            skill_menu_open: false,
+            edit_add_menu_open: false,
+            edit_model_menu_open: false,
+            selected_skills: Default::default(),
             models: Vec::new(),
             selected_model: None,
+            memories: Vec::new(),
+            memories_loaded: false,
             todo_strip_open: true,
             renaming_session: None,
             rename_input,
@@ -572,6 +721,7 @@ impl AgentIdeApp {
             about_open: false,
             shortcuts_open: false,
             context_drawer_open: false,
+            context_apply_target: ContextApplyTarget::Composer,
             ctx_filter: "all",
             ctx_selected: Default::default(),
             menubar_open: None,
@@ -647,25 +797,9 @@ impl AgentIdeApp {
             }
             if store.get_string_or("moonlit:settings:theme", "auto") == "dark" {
                 app.dark = true;
-                app.t = Tokens::claude_dark();
             }
         }
-        if app.dark {
-            let (accent, selection) = (app.t.accent, app.t.bg_selection);
-            for input in [
-                &app.composer,
-                &app.edit_input,
-                &app.sidebar_search,
-                &app.ws_search,
-                &app.rename_input,
-                &app.palette_input,
-                &app.term_input,
-                &app.auth_email,
-                &app.auth_password,
-            ] {
-                input.update(cx, |i, _| i.set_accent(accent, selection));
-            }
-        }
+        app.refresh_appearance_tokens(cx);
         // Stored token → skip the login gate and authenticate the client.
         let stored_token = app
             .store
@@ -676,7 +810,9 @@ impl AgentIdeApp {
             app.api = app.api.clone().with_auth_token(token);
             app.authed = true;
             app.bootstrap();
-        } else if std::env::var("MOONLIT_SKIP_LOGIN").is_ok() || std::env::var("MOONLIT_SMOKE").is_ok() {
+        } else if std::env::var("MOONLIT_SKIP_LOGIN").is_ok()
+            || std::env::var("MOONLIT_SMOKE").is_ok()
+        {
             // Dev bypass, mirroring the legacy `?skipLogin=1` (`makeDebugUser`).
             app.authed = true;
             app.auth_user = Some("本地调试".into());
@@ -698,6 +834,11 @@ impl AgentIdeApp {
         if let Ok(page) = std::env::var("MOONLIT_SETTINGS_PAGE") {
             app.state.settings.page = crate::SettingsPage::from_id(&page);
         }
+        // Defensive: never restore a menubar/palette overlay that would block the titlebar.
+        app.menubar_open = None;
+        app.palette_open = false;
+        app.about_open = false;
+        app.shortcuts_open = false;
         app
     }
 
@@ -722,18 +863,14 @@ impl AgentIdeApp {
                 }
             }
             if let Ok(status) = api.provider_status().await {
-                let mode = status.get("mode").and_then(|v| v.as_str()).unwrap_or("offline").to_string();
-                let model = status
-                    .get("openaiCompatible")
-                    .and_then(|v| v.get("model"))
-                    .and_then(|v| v.as_str())
-                    .or_else(|| status.get("defaultModelId").and_then(|v| v.as_str()))
-                    .unwrap_or("default")
-                    .to_string();
+                let (mode, model) = provider_status_tuple(&status);
                 let _ = tx.unbounded_send(AppMsg::Provider { mode, model });
             }
             if let Ok(tree) = api.workspace_tree("", false).await {
-                let branch = tree.get("gitBranch").and_then(|v| v.as_str()).map(str::to_string);
+                let branch = tree
+                    .get("gitBranch")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
                 let nodes = parse_backend_tree(&tree);
                 let _ = tx.unbounded_send(AppMsg::Tree { branch, nodes });
             }
@@ -741,26 +878,49 @@ impl AgentIdeApp {
                 .read_workspace_file("README.md")
                 .await
                 .ok()
-                .and_then(|v| v.get("content").and_then(|c| c.as_str()).map(str::to_string));
+                .and_then(|v| {
+                    v.get("content")
+                        .and_then(|c| c.as_str())
+                        .map(str::to_string)
+                });
             let _ = tx.unbounded_send(AppMsg::Readme(readme));
             if let Ok(models) = api.list_models().await {
-                let list = models
-                    .get("models")
-                    .and_then(|v| v.as_array())
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|m| {
-                                serde_json::from_value::<moonlit_core::models::AgentModelOption>(m.clone()).ok()
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
+                let list = parse_model_options(&models);
                 let _ = tx.unbounded_send(AppMsg::Models(list));
             }
             // Profile feeds the settings nav foot / 通用 / 套餐页.
             let profile = api.me().await.ok();
             let _ = tx.unbounded_send(AppMsg::Profile(profile.map(Box::new)));
         });
+    }
+
+    fn refresh_provider_and_models(&self) {
+        let Some(handle) = RUNTIME.get() else { return };
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        handle.spawn(async move {
+            if let Ok(status) = api.provider_status().await {
+                let (mode, model) = provider_status_tuple(&status);
+                let _ = tx.unbounded_send(AppMsg::Provider { mode, model });
+            }
+            if let Ok(models) = api.list_models().await {
+                let _ = tx.unbounded_send(AppMsg::Models(parse_model_options(&models)));
+            }
+        });
+    }
+
+    pub(crate) fn model_display_label(&self, model_id: &str) -> String {
+        self.models
+            .iter()
+            .find(|m| m.id == model_id)
+            .map(|m| {
+                if m.label.is_empty() {
+                    m.id.clone()
+                } else {
+                    m.label.clone()
+                }
+            })
+            .unwrap_or_else(|| model_id.to_string())
     }
 
     fn handle_msg(&mut self, msg: AppMsg, cx: &mut Context<Self>) {
@@ -786,8 +946,49 @@ impl AgentIdeApp {
                 self.state.workbench.open_file(path.clone(), content);
                 self.active_tab = format!("file:{path}");
             }
+            AppMsg::DocumentLoaded { path, ir } => {
+                let parsed: moonlit_doccore::DocIR = match serde_json::from_value(ir) {
+                    Ok(ir) => ir,
+                    Err(err) => {
+                        self.toast(format!("文档解析失败: {err}"), ToastKind::Error, cx);
+                        return;
+                    }
+                };
+                let rel = path.clone();
+                let editor = cx.new(|cx| {
+                    let mut view = moonlit_docforge::app::DocForgeApp::new_standalone(cx);
+                    view.load_workspace_ir(rel.clone(), parsed, cx);
+                    view
+                });
+                self.document_editors.insert(path.clone(), editor);
+                self.document_previews.remove(&path);
+                self.state.workbench.open_document(path.clone());
+                self.active_tab = format!("doc:{path}");
+            }
+            AppMsg::DocumentTextLoaded { path, text } => {
+                self.document_previews.insert(path.clone(), text);
+                self.document_editors.remove(&path);
+                self.state.workbench.open_document(path.clone());
+                self.active_tab = format!("doc:{path}");
+            }
+            AppMsg::DocumentFailed { path, message } => {
+                self.toast(format!("无法打开 {path}: {message}"), ToastKind::Error, cx);
+            }
             AppMsg::Models(models) => {
                 self.models = models;
+                let selected_is_valid = self
+                    .selected_model
+                    .as_ref()
+                    .map(|id| self.models.iter().any(|m| &m.id == id))
+                    .unwrap_or(false);
+                if !selected_is_valid {
+                    self.selected_model = self
+                        .models
+                        .iter()
+                        .find(|m| m.availability.as_deref() == Some("available"))
+                        .or_else(|| self.models.first())
+                        .map(|m| m.id.clone());
+                }
             }
             AppMsg::Readme(content) => {
                 self.readme = content;
@@ -812,7 +1013,11 @@ impl AgentIdeApp {
                 self.login_error = Some(msg);
             }
             AppMsg::TreeChildren { parent, nodes } => {
-                fn insert(tree: &mut [WorkspaceNode], parent: &str, nodes: &[WorkspaceNode]) -> bool {
+                fn insert(
+                    tree: &mut [WorkspaceNode],
+                    parent: &str,
+                    nodes: &[WorkspaceNode],
+                ) -> bool {
                     for node in tree.iter_mut() {
                         if node.path == parent {
                             node.children = nodes.to_vec();
@@ -827,34 +1032,43 @@ impl AgentIdeApp {
                 insert(&mut self.state.workbench.workspace_tree, &parent, &nodes);
             }
             AppMsg::Snapshot(snap) => {
-                let active = snap.active_session.as_ref().map(|s| s.id.clone());
-                self.active_plan_id = snap
+                let snapshot = *snap;
+                if !self.state.snapshot_targets_active(&snapshot) {
+                    return;
+                }
+                let active = snapshot.active_session.as_ref().map(|s| s.id.clone());
+                let latest_seq = snapshot.latest_seq;
+                self.active_plan_id = snapshot
                     .active_session
                     .as_ref()
                     .and_then(|s| s.active_plan_id.clone())
                     .or_else(|| {
-                        snap.plan_bundle
+                        snapshot
+                            .plan_bundle
                             .as_ref()
                             .and_then(|b| b.get("plan").and_then(|p| p.get("id")))
                             .and_then(|v| v.as_str())
                             .map(str::to_string)
                     });
-                self.metrics = snap.metrics.clone();
-                self.state.workbench.plan_bundle = snap.plan_bundle.clone();
-                self.state.workbench.swarm = snap.swarm.clone();
-                let (views, pids) = proposals_to_views(&snap.proposals);
+                self.metrics = snapshot.metrics.clone();
+                self.state.workbench.plan_bundle = snapshot.plan_bundle.clone();
+                self.state.workbench.swarm = snapshot.swarm.clone();
+                let (views, pids) = proposals_to_views(&snapshot.proposals);
                 self.state.workbench.proposals = views;
                 self.proposal_pids = pids;
                 self.diff_index = 0;
-                let skip = snap.events.len().saturating_sub(300);
-                self.events = snap.events.iter().skip(skip).cloned().collect();
-                self.state.hydrate_snapshot(*snap);
+                let skip = snapshot.events.len().saturating_sub(300);
+                self.events = snapshot.events.iter().skip(skip).cloned().collect();
+                self.state.hydrate_snapshot(snapshot);
                 self.status = format!("已加载 {} 个会话", self.state.sessions.len()).into();
                 if let Some(id) = active {
-                    self.subscribe(id);
+                    self.subscribe_from(id, Some(latest_seq));
                 }
             }
             AppMsg::Event(evt) => {
+                if !self.state.event_targets_active(&evt) {
+                    return;
+                }
                 self.events.push(evt.clone());
                 if self.events.len() > 300 {
                     self.events.remove(0);
@@ -862,13 +1076,17 @@ impl AgentIdeApp {
                 let evt_type = evt.event_type.clone();
                 // Track the active plan id from plan lifecycle events so the
                 // `plan.*` refetch can target the right plan.
-                if evt_type == "plan.created" || evt_type == "plan.replanned" {
-                    if let Some(id) = evt.payload.get("id").and_then(|v| v.as_str()) {
-                        self.active_plan_id = Some(id.to_string());
+                if evt_type == "plan.created"
+                    || evt_type == "plan.replanned"
+                    || evt_type == "plan.generated"
+                {
+                    if let Some(id) = crate::plan_id_from_event_payload(&evt.payload) {
+                        self.active_plan_id = Some(id);
                     }
                 }
-                self.state.apply_event(evt);
-                self.refetch_after_event(&evt_type);
+                if self.state.apply_event(evt) {
+                    self.refetch_after_event(&evt_type);
+                }
             }
             AppMsg::SessionCreated(session) => {
                 let id = session.id.clone();
@@ -876,7 +1094,7 @@ impl AgentIdeApp {
                     self.state.sessions.insert(0, session);
                 }
                 self.state.active_session_id = Some(id.clone());
-                self.state.chat.messages.clear();
+                self.state.chat.reset();
                 self.toast("已新建会话", ToastKind::Success, cx);
                 if let Some(store) = &self.store {
                     let _ = store.set_string(keys::SELECTED_SESSION, &id);
@@ -903,7 +1121,11 @@ impl AgentIdeApp {
                     self.auth_profile = Some(user);
                 }
             }
-            AppMsg::ProfileSaved { result, ok_toast, close_acct } => {
+            AppMsg::ProfileSaved {
+                result,
+                ok_toast,
+                close_acct,
+            } => {
                 self.acct_saving = false;
                 match result {
                     Ok(value) => {
@@ -923,9 +1145,20 @@ impl AgentIdeApp {
                 }
             }
             AppMsg::SettingsToast(msg, ok) => {
-                self.toast(msg, if ok { ToastKind::Success } else { ToastKind::Error }, cx);
+                self.toast(
+                    msg,
+                    if ok {
+                        ToastKind::Success
+                    } else {
+                        ToastKind::Error
+                    },
+                    cx,
+                );
             }
-            AppMsg::Channels { providers, channels } => {
+            AppMsg::Channels {
+                providers,
+                channels,
+            } => {
                 self.channels_loading = false;
                 self.channels_loaded = true;
                 self.provider_types = providers;
@@ -934,6 +1167,7 @@ impl AgentIdeApp {
             AppMsg::ChannelsList(channels) => {
                 self.channels_loaded = true;
                 self.channels = channels;
+                self.refresh_provider_and_models();
             }
             AppMsg::ChannelSaved(result) => {
                 self.channel_saving = false;
@@ -941,6 +1175,7 @@ impl AgentIdeApp {
                     Ok(channels) => {
                         self.channels = channels;
                         self.channel_draft = None;
+                        self.refresh_provider_and_models();
                         self.toast("渠道已保存", ToastKind::Success, cx);
                     }
                     Err(err) => self.toast(format!("保存失败：{err}"), ToastKind::Error, cx),
@@ -978,18 +1213,31 @@ impl AgentIdeApp {
             }
             AppMsg::Skills(items) => {
                 self.skills_loading = false;
-                self.skills = Some(items);
+                self.skills = Some(Self::dedupe_skill_items(items));
             }
             AppMsg::SkillContent { name, content } => {
                 self.skill_previews.insert(name, content);
             }
+            AppMsg::MemoriesLoaded(items) => {
+                self.memories = items;
+                self.memories_loaded = true;
+            }
             AppMsg::PlanBundle(bundle) => {
                 self.plan_refetch_inflight = false;
                 if let Some(b) = bundle {
-                    if let Some(id) = b.get("plan").and_then(|p| p.get("id")).and_then(|v| v.as_str()) {
+                    let normalized =
+                        crate::plan_response_to_bundle(&b).unwrap_or(b);
+                    if let Some(id) = normalized
+                        .get("plan")
+                        .and_then(|p| p.get("id"))
+                        .and_then(|v| v.as_str())
+                    {
                         self.active_plan_id = Some(id.to_string());
                     }
-                    self.state.workbench.plan_bundle = Some(b);
+                    self.state.workbench.plan_bundle = Some(normalized);
+                    self.state
+                        .workbench
+                        .open_builtin(crate::BuiltinTab::Plan);
                 }
             }
             AppMsg::ProposalsList(list) => {
@@ -1038,7 +1286,9 @@ impl AgentIdeApp {
     /// a single request. Chat stays event-driven and is never re-hydrated here.
     fn refetch_after_event(&mut self, evt_type: &str) {
         let Some(handle) = RUNTIME.get() else { return };
-        let Some(session) = self.state.active_session_id.clone() else { return };
+        let Some(session) = self.state.active_session_id.clone() else {
+            return;
+        };
 
         if evt_type.starts_with("plan.") && !self.plan_refetch_inflight {
             if let Some(plan_id) = self.active_plan_id.clone() {
@@ -1059,9 +1309,9 @@ impl AgentIdeApp {
             let s = session.clone();
             handle.spawn(async move {
                 let list = api.list_proposals(&s).await.ok().and_then(|v| {
-                    v.get("proposals")
-                        .cloned()
-                        .and_then(|p| serde_json::from_value::<Vec<moonlit_core::models::Proposal>>(p).ok())
+                    v.get("proposals").cloned().and_then(|p| {
+                        serde_json::from_value::<Vec<moonlit_core::models::Proposal>>(p).ok()
+                    })
                 });
                 let _ = tx.unbounded_send(AppMsg::ProposalsList(list));
             });
@@ -1072,7 +1322,10 @@ impl AgentIdeApp {
             let api = self.api.clone();
             let tx = self.tx.clone();
             handle.spawn(async move {
-                let state = api.passthrough_get("/api/agent-debug/swarm/state").await.ok();
+                let state = api
+                    .passthrough_get("/api/agent-debug/swarm/state")
+                    .await
+                    .ok();
                 let _ = tx.unbounded_send(AppMsg::SwarmState(state));
             });
         }
@@ -1092,6 +1345,10 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn subscribe(&mut self, session_id: String) {
+        self.subscribe_from(session_id, None);
+    }
+
+    pub(crate) fn subscribe_from(&mut self, session_id: String, from_seq: Option<u64>) {
         if let Some(h) = self.event_task.take() {
             h.abort();
         }
@@ -1101,7 +1358,7 @@ impl AgentIdeApp {
         let task = handle.spawn(async move {
             let mut sub = api.subscribe_events(SubscribeRequest {
                 session_id,
-                from_seq: None,
+                from_seq,
                 channels: None,
                 static_token: None,
             });
@@ -1113,6 +1370,11 @@ impl AgentIdeApp {
                     EventFrame::TransportError(e) => {
                         let _ = tx.unbounded_send(AppMsg::Status(format!("事件流中断: {e}")));
                     }
+                    EventFrame::ReplayGap(_) => {
+                        let _ = tx.unbounded_send(AppMsg::Status(
+                            "事件流存在缺口，请重新选择会话刷新".into(),
+                        ));
+                    }
                     _ => {}
                 }
             }
@@ -1122,7 +1384,12 @@ impl AgentIdeApp {
 
     // ---- toasts ---------------------------------------------------------------
 
-    pub(crate) fn toast(&mut self, title: impl Into<String>, kind: ToastKind, cx: &mut Context<Self>) {
+    pub(crate) fn toast(
+        &mut self,
+        title: impl Into<String>,
+        kind: ToastKind,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.state.toasts.push(title, None, kind);
         // 2.8s auto-dismiss, matching the legacy toast lifetime.
         cx.spawn(async move |this, cx| {
@@ -1146,9 +1413,10 @@ impl AgentIdeApp {
         let tx = self.tx.clone();
         let web_search = self.state.settings.web_search_enabled;
         let model = self.selected_model.clone();
+        let agent_kind = self.agent_kind.as_str().to_string();
         handle.spawn(async move {
             match api
-                .create_session(Some("新会话"), model.as_deref(), web_search)
+                .create_session(Some("新会话"), &agent_kind, model.as_deref(), web_search)
                 .await
             {
                 Ok(value) => match parse_session_response(value) {
@@ -1288,7 +1556,22 @@ impl AgentIdeApp {
     pub(crate) fn select_session(&mut self, id: String, cx: &mut Context<Self>) {
         self.renaming_session = None;
         self.editing_msg = None;
+        self.edit_add_menu_open = false;
+        self.edit_model_menu_open = false;
+        if self.context_apply_target == ContextApplyTarget::EditMessage {
+            self.context_drawer_open = false;
+            self.context_apply_target = ContextApplyTarget::Composer;
+        }
         self.state.active_session_id = Some(id.clone());
+        // Reflect the selected session's agent profile in the composer.
+        if let Some(session) = self.state.sessions.iter().find(|s| s.id == id) {
+            let kind =
+                crate::AgentKind::from_str(session.agent_kind.as_deref().unwrap_or("coding"));
+            self.agent_kind = kind;
+            if !kind.supports_mode(&self.mode) {
+                self.mode = ComposerMode::Build;
+            }
+        }
         if let Some(store) = &self.store {
             let _ = store.set_string(keys::SELECTED_SESSION, &id);
         }
@@ -1324,8 +1607,7 @@ impl AgentIdeApp {
 
     pub(crate) fn set_permission_mode_backend(&mut self, mode: String, cx: &mut Context<Self>) {
         self.permission_mode = mode.clone();
-        if let (Some(session), Some(handle)) =
-            (self.state.active_session_id.clone(), RUNTIME.get())
+        if let (Some(session), Some(handle)) = (self.state.active_session_id.clone(), RUNTIME.get())
         {
             let api = self.api.clone();
             let tx = self.tx.clone();
@@ -1349,7 +1631,10 @@ impl AgentIdeApp {
             let api = self.api.clone();
             let tx = self.tx.clone();
             handle.spawn(async move {
-                match api.create_checkpoint(&session, Vec::new(), "手动检查点").await {
+                match api
+                    .create_checkpoint(&session, Vec::new(), "手动检查点")
+                    .await
+                {
                     Ok(_) => {
                         let _ = tx.unbounded_send(AppMsg::Status("已创建检查点".into()));
                         let cps = api
@@ -1388,7 +1673,9 @@ impl AgentIdeApp {
                                 .list_checkpoints(&session)
                                 .await
                                 .ok()
-                                .and_then(|v| v.get("checkpoints").and_then(|c| c.as_array()).cloned())
+                                .and_then(|v| {
+                                    v.get("checkpoints").and_then(|c| c.as_array()).cloned()
+                                })
                                 .unwrap_or_default();
                             let _ = tx.unbounded_send(AppMsg::Checkpoints(cps));
                         }
@@ -1403,7 +1690,7 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn send(&mut self, cx: &mut Context<Self>) {
-        let text = self.composer.read(cx).text().to_string();
+        let mut text = self.composer.read(cx).text().to_string();
         if text.trim().is_empty() {
             return;
         }
@@ -1411,6 +1698,17 @@ impl AgentIdeApp {
             self.toast("请先新建或选择会话", ToastKind::Error, cx);
             return;
         };
+        if !self.selected_skills.is_empty() {
+            let mut skills: Vec<String> = self.selected_skills.iter().cloned().collect();
+            skills.sort();
+            text = format!(
+                "Use skills: {}.\n\n{}",
+                skills.join(", "),
+                text.trim()
+            );
+            self.selected_skills.clear();
+            self.skill_menu_open = false;
+        }
         // Optimistic local echo. The replayed composer.user.message event
         // replaces this local entry once the backend assigns a run id.
         self.state.chat.push_local_user(text.clone());
@@ -1420,10 +1718,77 @@ impl AgentIdeApp {
             let api = self.api.clone();
             let tx = self.tx.clone();
             let mode = self.mode.as_str().to_string();
+            let agent_kind = self.agent_kind.as_str().to_string();
+            // #region agent log
+            {
+                use std::io::Write;
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_millis())
+                    .unwrap_or(0);
+                let line = serde_json::json!({
+                    "sessionId": "f79bb5",
+                    "hypothesisId": "H1",
+                    "location": "app.rs:send",
+                    "message": "frontend ask_execute dispatch",
+                    "data": {
+                        "sessionId": session_id,
+                        "composerMode": mode,
+                        "agentKind": agent_kind,
+                        "textLen": text.len(),
+                    },
+                    "timestamp": ts,
+                });
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(r"h:\agent-debug-frontend-backend-copy-20260530\debug-f79bb5.log")
+                {
+                    let _ = writeln!(f, "{line}");
+                }
+            }
+            // #endregion
             handle.spawn(async move {
                 match api.ask_execute(&session_id, &text, None, &mode).await {
-                    Ok(_) => {
-                        let _ = tx.unbounded_send(AppMsg::Status("已提交，等待响应…".into()));
+                    Ok(body) => {
+                        // #region agent log
+                        {
+                            use std::io::Write;
+                            let ts = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis())
+                                .unwrap_or(0);
+                            let line = serde_json::json!({
+                                "sessionId": "f79bb5",
+                                "hypothesisId": "H1",
+                                "location": "app.rs:send:response",
+                                "message": "ask_execute response",
+                                "data": {
+                                    "composerModeSent": mode,
+                                    "composerModeReturned": body.get("composerMode"),
+                                    "hasPlan": body.get("plan").is_some(),
+                                    "hasRun": body.get("run").is_some(),
+                                },
+                                "timestamp": ts,
+                            });
+                            if let Ok(mut f) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open(r"h:\agent-debug-frontend-backend-copy-20260530\debug-f79bb5.log")
+                            {
+                                let _ = writeln!(f, "{line}");
+                            }
+                        }
+                        // #endregion
+                        if let Some(bundle) = crate::plan_response_to_bundle(&body) {
+                            let _ = tx.unbounded_send(AppMsg::PlanBundle(Some(bundle)));
+                        }
+                        let status = if mode == "plan" {
+                            "Plan 模式：规划回合已提交，确认计划后再执行…"
+                        } else {
+                            "已提交，等待响应…"
+                        };
+                        let _ = tx.unbounded_send(AppMsg::Status(status.into()));
                     }
                     Err(err) => {
                         let _ = tx.unbounded_send(AppMsg::Status(format!("提交失败: {err}")));
@@ -1435,7 +1800,9 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn abort_run(&mut self, cx: &mut Context<Self>) {
-        let Some(run_id) = self.state.chat.active_run_id.clone() else { return };
+        let Some(run_id) = self.state.chat.active_run_id.clone() else {
+            return;
+        };
         if let Some(handle) = RUNTIME.get() {
             let api = self.api.clone();
             let tx = self.tx.clone();
@@ -1457,9 +1824,40 @@ impl AgentIdeApp {
             ComposerMode::Multitask => "Run multiple subagents in parallel…",
             ComposerMode::Ask => "Ask a question about your codebase…",
         };
-        self.composer.update(cx, |c, cx| c.set_placeholder(placeholder, cx));
+        self.composer
+            .update(cx, |c, cx| c.set_placeholder(placeholder, cx));
         self.mode = mode;
         cx.notify();
+    }
+
+    /// Switch the agent profile. Applies to the next new session; if a session
+    /// is active its kind is patched too. Resets the composer mode when the new
+    /// profile doesn't support the current one.
+    pub(crate) fn set_agent_kind(&mut self, kind: crate::AgentKind, cx: &mut Context<Self>) {
+        self.agent_kind = kind;
+        if !kind.supports_mode(&self.mode) {
+            self.set_mode(ComposerMode::Build, cx);
+        }
+        self.add_menu_open = false;
+        // Persist the kind onto the active session so the backend uses the
+        // right profile for subsequent turns.
+        if let Some(session_id) = self.state.active_session_id.clone() {
+            if let Some(handle) = RUNTIME.get() {
+                let api = self.api.clone();
+                let tx = self.tx.clone();
+                let kind_str = kind.as_str().to_string();
+                handle.spawn(async move {
+                    if let Err(err) = api
+                        .patch_session(&session_id, serde_json::json!({ "agentKind": kind_str }))
+                        .await
+                    {
+                        let _ =
+                            tx.unbounded_send(AppMsg::Status(format!("切换代理类型失败: {err}")));
+                    }
+                });
+            }
+        }
+        self.toast(format!("代理类型：{}", kind.label()), ToastKind::Info, cx);
     }
 
     // ---- auth -------------------------------------------------------------------
@@ -1503,7 +1901,10 @@ impl AgentIdeApp {
     // ---- palette / overlays / theme -------------------------------------------
 
     /// (id, icon, label, section) command registry, filtered by the palette query.
-    pub(crate) fn palette_commands(&self, cx: &App) -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
+    pub(crate) fn palette_commands(
+        &self,
+        cx: &App,
+    ) -> Vec<(&'static str, &'static str, &'static str, &'static str)> {
         const ALL: &[(&str, &str, &str, &str)] = &[
             ("session.new", "sparkles", "New Agent", "agent"),
             ("workspace.open", "folder", "Open Workspace", "agent"),
@@ -1515,7 +1916,12 @@ impl AgentIdeApp {
             ("settings.open", "settings-2", "打开设置", "view"),
             ("panel.toggle", "panel-bottom", "切换底部面板", "view"),
             ("theme.toggle", "sparkles", "切换主题", "view"),
-            ("help.shortcuts", "message-square-text", "键盘快捷键", "view"),
+            (
+                "help.shortcuts",
+                "message-square-text",
+                "键盘快捷键",
+                "view",
+            ),
             ("help.about", "user-round", "关于月夜", "view"),
         ];
         let query = self.palette_input.read(cx).text().to_lowercase();
@@ -1532,7 +1938,10 @@ impl AgentIdeApp {
         match id {
             "session.new" => self.new_session(cx),
             "workspace.open" => self.open_workspace(cx),
-            "settings.open" => self.settings_open = true,
+            "settings.open" => {
+                self.settings_open = true;
+                self.memories_loaded = false;
+            }
             "panel.toggle" => self.toggle_bottom(cx),
             "theme.toggle" => self.toggle_theme(cx),
             "help.shortcuts" => self.shortcuts_open = true,
@@ -1547,16 +1956,20 @@ impl AgentIdeApp {
 
     pub(crate) fn run_palette_selection(&mut self, cx: &mut Context<Self>) {
         let commands = self.palette_commands(cx);
-        if let Some((id, _, _, _)) = commands.get(self.palette_index.min(commands.len().saturating_sub(1))) {
+        if let Some((id, _, _, _)) =
+            commands.get(self.palette_index.min(commands.len().saturating_sub(1)))
+        {
             let id = id.to_string();
             self.run_palette_command(&id, cx);
         }
     }
 
     pub(crate) fn open_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menubar_open = None;
         self.palette_open = true;
         self.palette_index = 0;
-        self.palette_input.update(cx, |input, cx| input.set_text("", cx));
+        self.palette_input
+            .update(cx, |input, cx| input.set_text("", cx));
         let handle = self.palette_input.read(cx).focus_handle_clone();
         window.focus(&handle);
         cx.notify();
@@ -1574,12 +1987,16 @@ impl AgentIdeApp {
         self.chathead_menu = None;
         self.add_menu_open = false;
         self.model_menu_open = false;
+        self.skill_menu_open = false;
+        self.edit_add_menu_open = false;
+        self.edit_model_menu_open = false;
         self.ws_menu_open = false;
         self.user_menu_open = false;
         self.subagent_overlay = None;
         self.renaming_session = None;
         self.editing_msg = None;
         self.context_drawer_open = false;
+        self.context_apply_target = ContextApplyTarget::Composer;
         self.settings_menu = None;
         self.crud_modal = None;
         cx.notify();
@@ -1587,19 +2004,49 @@ impl AgentIdeApp {
 
     pub(crate) fn toggle_theme(&mut self, cx: &mut Context<Self>) {
         self.dark = !self.dark;
-        self.t = if self.dark { Tokens::claude_dark() } else { Tokens::claude_light() };
+        self.refresh_appearance_tokens(cx);
+        cx.notify();
+    }
+
+    /// Rebuild theme tokens (base palette + float-surface opacity from settings).
+    pub(crate) fn refresh_appearance_tokens(&mut self, cx: &mut Context<Self>) {
+        let mut t = if self.dark {
+            Tokens::claude_dark()
+        } else {
+            Tokens::claude_light()
+        };
+        let reduce = self.s_bool("moonlit:s:reduceTransp", true);
+        t.bg_float = if reduce {
+            t.bg_panel
+        } else if self.dark {
+            gpui::rgba(0x232220ee)
+        } else {
+            gpui::rgba(0xffffffee)
+        };
+        self.t = t;
         let (accent, selection) = (self.t.accent, self.t.bg_selection);
-        for input in [&self.composer, &self.edit_input, &self.sidebar_search, &self.ws_search, &self.rename_input, &self.palette_input] {
+        for input in [
+            &self.composer,
+            &self.edit_input,
+            &self.sidebar_search,
+            &self.ws_search,
+            &self.rename_input,
+            &self.palette_input,
+            &self.term_input,
+            &self.auth_email,
+            &self.auth_password,
+        ] {
             input.update(cx, |i, _| i.set_accent(accent, selection));
         }
         for input in self.settings_inputs.values() {
             input.update(cx, |i, _| i.set_accent(accent, selection));
         }
-        cx.notify();
     }
 
     pub(crate) fn fork_session(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.state.active_session_id.clone() else { return };
+        let Some(id) = self.state.active_session_id.clone() else {
+            return;
+        };
         if let Some(handle) = RUNTIME.get() {
             let api = self.api.clone();
             let tx = self.tx.clone();
@@ -1623,7 +2070,9 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn revert_to(&mut self, message_id: String, cx: &mut Context<Self>) {
-        let Some(id) = self.state.active_session_id.clone() else { return };
+        let Some(id) = self.state.active_session_id.clone() else {
+            return;
+        };
         if let Some(handle) = RUNTIME.get() {
             let api = self.api.clone();
             let tx = self.tx.clone();
@@ -1650,10 +2099,10 @@ impl AgentIdeApp {
         message_id: String,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         if self.state.chat.active_run_id.is_some() {
             self.toast("当前有任务运行中，请先等待完成或中止", ToastKind::Error, cx);
-            return;
+            return false;
         }
         let Some(text) = self
             .state
@@ -1663,24 +2112,40 @@ impl AgentIdeApp {
             .find(|m| m.id == message_id)
             .map(|m| m.text.clone())
         else {
-            return;
+            return false;
         };
+        self.add_menu_open = false;
+        self.model_menu_open = false;
+        self.skill_menu_open = false;
+        self.edit_add_menu_open = false;
+        self.edit_model_menu_open = false;
+        self.context_drawer_open = false;
+        self.context_apply_target = ContextApplyTarget::Composer;
         self.edit_input.update(cx, |i, cx| i.set_text(text, cx));
         self.editing_msg = Some(message_id);
         let handle = self.edit_input.read(cx).focus_handle_clone();
         window.focus(&handle);
         cx.notify();
+        true
     }
 
     pub(crate) fn cancel_edit(&mut self, cx: &mut Context<Self>) {
         self.editing_msg = None;
+        self.edit_add_menu_open = false;
+        self.edit_model_menu_open = false;
+        if self.context_apply_target == ContextApplyTarget::EditMessage {
+            self.context_drawer_open = false;
+            self.context_apply_target = ContextApplyTarget::Composer;
+        }
         cx.notify();
     }
 
     /// "Edit = revert + resend": truncate the session to *before* the edited
     /// user message on the backend, then re-run `ask:execute` with new text.
     pub(crate) fn resend_edited(&mut self, cx: &mut Context<Self>) {
-        let Some(message_id) = self.editing_msg.clone() else { return };
+        let Some(message_id) = self.editing_msg.clone() else {
+            return;
+        };
         let text = self.edit_input.read(cx).text().trim().to_string();
         if text.is_empty() {
             self.toast("请输入新的消息内容", ToastKind::Error, cx);
@@ -1691,6 +2156,12 @@ impl AgentIdeApp {
             return;
         };
         self.editing_msg = None;
+        self.edit_add_menu_open = false;
+        self.edit_model_menu_open = false;
+        if self.context_apply_target == ContextApplyTarget::EditMessage {
+            self.context_drawer_open = false;
+            self.context_apply_target = ContextApplyTarget::Composer;
+        }
         // Optimistic local echo: drop the edited message and its tail, then
         // re-append the new text. The backend events re-sync the real state.
         self.state.chat.truncate_at(&message_id);
@@ -1705,7 +2176,10 @@ impl AgentIdeApp {
             let needs_revert = !message_id.starts_with("local-");
             handle.spawn(async move {
                 if needs_revert {
-                    if let Err(err) = api.revert_session(&session_id, Some(&message_id), true).await {
+                    if let Err(err) = api
+                        .revert_session(&session_id, Some(&message_id), true)
+                        .await
+                    {
                         let _ = tx.unbounded_send(AppMsg::Status(format!("回退失败: {err}")));
                         if let Ok(snap) = api.snapshot(Some(&session_id)).await {
                             let _ = tx.unbounded_send(AppMsg::Snapshot(Box::new(snap)));
@@ -1714,7 +2188,10 @@ impl AgentIdeApp {
                     }
                 }
                 match api.ask_execute(&session_id, &text, None, &mode).await {
-                    Ok(_) => {
+                    Ok(body) => {
+                        if let Some(bundle) = crate::plan_response_to_bundle(&body) {
+                            let _ = tx.unbounded_send(AppMsg::PlanBundle(Some(bundle)));
+                        }
                         let _ = tx.unbounded_send(AppMsg::Status("已回退并重新发送".into()));
                     }
                     Err(err) => {
@@ -1757,7 +2234,10 @@ impl AgentIdeApp {
             let api = self.api.clone();
             let tx = self.tx.clone();
             handle.spawn(async move {
-                if let Err(err) = api.patch_session(&id, serde_json::json!({ "pinned": pinned })).await {
+                if let Err(err) = api
+                    .patch_session(&id, serde_json::json!({ "pinned": pinned }))
+                    .await
+                {
                     let _ = tx.unbounded_send(AppMsg::Status(format!("置顶失败: {err}")));
                 }
             });
@@ -1769,7 +2249,7 @@ impl AgentIdeApp {
         self.state.sessions.retain(|s| s.id != id);
         if self.state.active_session_id.as_deref() == Some(id.as_str()) {
             self.state.active_session_id = None;
-            self.state.chat.messages.clear();
+            self.state.chat.reset();
         }
         if let Some(handle) = RUNTIME.get() {
             let api = self.api.clone();
@@ -1791,13 +2271,16 @@ impl AgentIdeApp {
             .find(|s| s.id == id)
             .map(|s| s.title.clone())
             .unwrap_or_default();
-        self.rename_input.update(cx, |input, cx| input.set_text(title, cx));
+        self.rename_input
+            .update(cx, |input, cx| input.set_text(title, cx));
         self.renaming_session = Some(id);
         cx.notify();
     }
 
     pub(crate) fn commit_rename(&mut self, title: String, cx: &mut Context<Self>) {
-        let Some(id) = self.renaming_session.take() else { return };
+        let Some(id) = self.renaming_session.take() else {
+            return;
+        };
         let title = title.trim().to_string();
         if title.is_empty() {
             cx.notify();
@@ -1812,7 +2295,10 @@ impl AgentIdeApp {
             let tx = self.tx.clone();
             handle.spawn(async move {
                 if let Err(err) = api
-                    .patch_session(&id, serde_json::json!({ "title": title, "titleManuallySet": true }))
+                    .patch_session(
+                        &id,
+                        serde_json::json!({ "title": title, "titleManuallySet": true }),
+                    )
                     .await
                 {
                     let _ = tx.unbounded_send(AppMsg::Status(format!("重命名失败: {err}")));
@@ -1822,9 +2308,66 @@ impl AgentIdeApp {
         cx.notify();
     }
 
+    pub(crate) fn composer_dropdowns_open(&self) -> bool {
+        self.add_menu_open
+            || self.model_menu_open
+            || self.skill_menu_open
+            || self.edit_add_menu_open
+            || self.edit_model_menu_open
+    }
+
+    pub(crate) fn close_composer_dropdowns(&mut self, cx: &mut Context<Self>) {
+        if !self.composer_dropdowns_open() {
+            return;
+        }
+        self.add_menu_open = false;
+        self.model_menu_open = false;
+        self.skill_menu_open = false;
+        self.edit_add_menu_open = false;
+        self.edit_model_menu_open = false;
+        cx.notify();
+    }
+
+    pub(crate) fn open_skill_menu(&mut self, cx: &mut Context<Self>) {
+        self.add_menu_open = false;
+        self.model_menu_open = false;
+        self.edit_add_menu_open = false;
+        self.edit_model_menu_open = false;
+        self.skill_menu_open = !self.skill_menu_open;
+        if self.skills.is_none() && !self.skills_loading {
+            self.load_skills();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn show_skill_menu(&mut self, cx: &mut Context<Self>) {
+        self.add_menu_open = false;
+        self.model_menu_open = false;
+        self.edit_add_menu_open = false;
+        self.edit_model_menu_open = false;
+        self.skill_menu_open = true;
+        if self.skills.is_none() && !self.skills_loading {
+            self.load_skills();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_composer_skill(&mut self, name: String, cx: &mut Context<Self>) {
+        if !self.selected_skills.remove(&name) {
+            self.selected_skills.insert(name);
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn remove_composer_skill(&mut self, name: String, cx: &mut Context<Self>) {
+        self.selected_skills.remove(&name);
+        cx.notify();
+    }
+
     pub(crate) fn pick_model(&mut self, model_id: String, cx: &mut Context<Self>) {
         self.selected_model = Some(model_id.clone());
         self.model_menu_open = false;
+        self.edit_model_menu_open = false;
         let Some(session_id) = self.state.active_session_id.clone() else {
             cx.notify();
             return;
@@ -1849,6 +2392,7 @@ impl AgentIdeApp {
             "diff" => Some(crate::BuiltinTab::Diff),
             "swarm" => Some(crate::BuiltinTab::Swarm),
             "readme" => Some(crate::BuiltinTab::Readme),
+            "docforge" => Some(crate::BuiltinTab::DocForge),
             _ => None,
         };
         if let Some(kind) = builtin {
@@ -1881,6 +2425,12 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn open_file(&mut self, path: String, cx: &mut Context<Self>) {
+        if is_workspace_internal_artifact(&path) {
+            return;
+        }
+        if let Some(kind) = Self::workspace_document_kind(&path) {
+            return self.open_workspace_document(path, kind, cx);
+        }
         // Workspace-relative paths come from the backend tree; read them
         // through the REST gateway like the legacy frontend does.
         if std::path::Path::new(&path).is_absolute() {
@@ -1916,8 +2466,136 @@ impl AgentIdeApp {
         cx.notify();
     }
 
+    fn workspace_document_kind(path: &str) -> Option<&'static str> {
+        match std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("docx") => Some("docx"),
+            Some("pptx") => Some("pptx"),
+            Some("pdf") => Some("pdf"),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn open_workspace_document(
+        &mut self,
+        path: String,
+        kind: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = format!("doc:{path}");
+        if kind == "pdf" {
+            // PDF: read extracted text into a read-only `doc:` preview tab. We
+            // never open it as an editable file buffer, so a stray Ctrl+S can't
+            // overwrite the binary PDF with plain text.
+            if self.document_previews.contains_key(&path) {
+                self.state.workbench.open_document(path.clone());
+                self.active_tab = tab_id;
+                cx.notify();
+                return;
+            }
+            let Some(handle) = RUNTIME.get() else { return };
+            let api = self.api.clone();
+            let tx = self.tx.clone();
+            let rel = path.clone();
+            handle.spawn(async move {
+                match api.read_workspace_document(&rel).await {
+                    Ok(value) => {
+                        let text = value
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let _ = tx.unbounded_send(AppMsg::DocumentTextLoaded { path: rel, text });
+                    }
+                    Err(err) => {
+                        let _ = tx.unbounded_send(AppMsg::DocumentFailed {
+                            path: rel,
+                            message: err.to_string(),
+                        });
+                    }
+                }
+            });
+            cx.notify();
+            return;
+        }
+
+        if self.document_editors.contains_key(&path) {
+            self.state.workbench.open_document(path.clone());
+            self.active_tab = tab_id;
+            cx.notify();
+            return;
+        }
+
+        let Some(handle) = RUNTIME.get() else { return };
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        let rel = path.clone();
+        self.toast(format!("正在打开 {rel}…"), ToastKind::Info, cx);
+        handle.spawn(async move {
+            match api.read_workspace_document(&rel).await {
+                Ok(value) => {
+                    if let Some(ir) = value.get("ir").cloned() {
+                        let _ = tx.unbounded_send(AppMsg::DocumentLoaded { path: rel, ir });
+                    } else {
+                        let _ = tx.unbounded_send(AppMsg::DocumentFailed {
+                            path: rel,
+                            message: "缺少 IR 数据".into(),
+                        });
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.unbounded_send(AppMsg::DocumentFailed {
+                        path: rel,
+                        message: err.to_string(),
+                    });
+                }
+            }
+        });
+        cx.notify();
+    }
+
     /// Write the active file tab's buffer back to the workspace (Ctrl+S).
     pub(crate) fn save_active_file(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab.starts_with("doc:") {
+            let path = self.active_tab.trim_start_matches("doc:").to_string();
+            let Some(editor) = self.document_editors.get(&path).cloned() else {
+                // No editor => read-only preview (PDF). Nothing to save.
+                if self.document_previews.contains_key(&path) {
+                    self.toast("PDF 为只读预览，无法保存", ToastKind::Info, cx);
+                }
+                return;
+            };
+            let ir_value = {
+                let view = editor.read(cx);
+                serde_json::to_value(view.read_ir()).ok()
+            };
+            let Some(ir) = ir_value else {
+                self.toast("无法序列化文档", ToastKind::Error, cx);
+                return;
+            };
+            let Some(handle) = RUNTIME.get() else { return };
+            let api = self.api.clone();
+            let tx = self.tx.clone();
+            let p = path.clone();
+            handle.spawn(async move {
+                match api.write_workspace_document(&p, &ir).await {
+                    Ok(_) => {
+                        let _ = tx.unbounded_send(AppMsg::Status(format!("已保存 {p}")));
+                    }
+                    Err(err) => {
+                        let _ = tx.unbounded_send(AppMsg::Status(format!("保存失败: {err}")));
+                    }
+                }
+            });
+            // Optimistically clear the editor's dirty flag (mirrors file tabs).
+            editor.update(cx, |view, _| view.clear_dirty());
+            self.toast("正在保存…", ToastKind::Info, cx);
+            return;
+        }
         if !self.active_tab.starts_with("file:") {
             return;
         }
@@ -1955,13 +2633,23 @@ impl AgentIdeApp {
                 }
             });
         }
-        if let Some(tab) = self.state.workbench.tabs.iter_mut().find(|t| t.id == tab_id) {
+        if let Some(tab) = self
+            .state
+            .workbench
+            .tabs
+            .iter_mut()
+            .find(|t| t.id == tab_id)
+        {
             tab.dirty = false;
         }
         self.toast("正在保存…", ToastKind::Info, cx);
     }
 
     pub(crate) fn close_tab(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(rel) = id.strip_prefix("doc:") {
+            self.document_editors.remove(rel);
+            self.document_previews.remove(rel);
+        }
         self.state.workbench.close_tab(&id);
         if self.active_tab == id {
             self.active_tab = self
@@ -2000,7 +2688,10 @@ impl AgentIdeApp {
             handle.spawn(async move {
                 if let Ok(tree) = api.workspace_tree(&path, false).await {
                     let nodes = parse_backend_tree(&tree);
-                    let _ = tx.unbounded_send(AppMsg::TreeChildren { parent: path, nodes });
+                    let _ = tx.unbounded_send(AppMsg::TreeChildren {
+                        parent: path,
+                        nodes,
+                    });
                 }
             });
         }
@@ -2008,7 +2699,9 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn run_control(&mut self, action: &'static str, cx: &mut Context<Self>) {
-        let Some(run_id) = self.state.chat.active_run_id.clone() else { return };
+        let Some(run_id) = self.state.chat.active_run_id.clone() else {
+            return;
+        };
         if let Some(handle) = RUNTIME.get() {
             let api = self.api.clone();
             let tx = self.tx.clone();
@@ -2075,7 +2768,11 @@ impl AgentIdeApp {
                     .read_workspace_file("README.md")
                     .await
                     .ok()
-                    .and_then(|v| v.get("content").and_then(|c| c.as_str()).map(str::to_string));
+                    .and_then(|v| {
+                        v.get("content")
+                            .and_then(|c| c.as_str())
+                            .map(str::to_string)
+                    });
                 let _ = tx.unbounded_send(AppMsg::Readme(readme));
             });
         }
@@ -2083,7 +2780,9 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn apply_proposal_at(&mut self, idx: usize, cx: &mut Context<Self>) {
-        let Some(pid) = self.proposal_pids.get(idx).cloned() else { return };
+        let Some(pid) = self.proposal_pids.get(idx).cloned() else {
+            return;
+        };
         let session = self.state.active_session_id.clone();
         if let Some(handle) = RUNTIME.get() {
             let api = self.api.clone();
@@ -2104,7 +2803,9 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn discard_proposal_at(&mut self, idx: usize, cx: &mut Context<Self>) {
-        let Some(pid) = self.proposal_pids.get(idx).cloned() else { return };
+        let Some(pid) = self.proposal_pids.get(idx).cloned() else {
+            return;
+        };
         let session = self.state.active_session_id.clone();
         if let Some(handle) = RUNTIME.get() {
             let api = self.api.clone();
@@ -2128,8 +2829,7 @@ impl AgentIdeApp {
         self.state.settings.web_search_enabled = !self.state.settings.web_search_enabled;
         let enabled = self.state.settings.web_search_enabled;
         // Persist on the active session so the backend toggles the search tool.
-        if let (Some(session), Some(handle)) =
-            (self.state.active_session_id.clone(), RUNTIME.get())
+        if let (Some(session), Some(handle)) = (self.state.active_session_id.clone(), RUNTIME.get())
         {
             if let Some(s) = self.state.sessions.iter_mut().find(|s| s.id == session) {
                 s.web_search_enabled = enabled;
@@ -2146,7 +2846,11 @@ impl AgentIdeApp {
             });
         }
         self.toast(
-            if enabled { "当前会话已启用联网搜索工具" } else { "当前会话已关闭联网搜索工具" },
+            if enabled {
+                "当前会话已启用联网搜索工具"
+            } else {
+                "当前会话已关闭联网搜索工具"
+            },
             ToastKind::Success,
             cx,
         );
@@ -2189,7 +2893,10 @@ impl AgentIdeApp {
         self.store
             .as_ref()
             .and_then(|s| s.get(key))
-            .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+            .and_then(|v| {
+                v.as_i64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
             .unwrap_or(default)
     }
 
@@ -2246,7 +2953,8 @@ impl AgentIdeApp {
             }
         })
         .detach();
-        self.settings_inputs.insert(store_key.to_string(), input.clone());
+        self.settings_inputs
+            .insert(store_key.to_string(), input.clone());
         input
     }
 
@@ -2260,7 +2968,9 @@ impl AgentIdeApp {
         let ratio = ((x - ox) / w).clamp(0., 1.);
         match id {
             "slider-hue" => self.s_set_int("moonlit:s:hue", (ratio * 360.).round() as i64),
-            "slider-intensity" => self.s_set_int("moonlit:s:intensity", (ratio * 100.).round() as i64),
+            "slider-intensity" => {
+                self.s_set_int("moonlit:s:intensity", (ratio * 100.).round() as i64)
+            }
             _ => {}
         }
     }
@@ -2343,7 +3053,11 @@ impl AgentIdeApp {
                 }
                 Err(err) => Err(err.to_string()),
             };
-            let _ = tx.unbounded_send(AppMsg::ProfileSaved { result, ok_toast, close_acct });
+            let _ = tx.unbounded_send(AppMsg::ProfileSaved {
+                result,
+                ok_toast,
+                close_acct,
+            });
         });
         cx.notify();
     }
@@ -2365,7 +3079,11 @@ impl AgentIdeApp {
             .get("acct:avatar")
             .map(|i| i.read(cx).text().trim().chars().take(1).collect::<String>())
             .unwrap_or_default();
-        let avatar = if avatar.is_empty() { name.chars().take(1).collect() } else { avatar };
+        let avatar = if avatar.is_empty() {
+            name.chars().take(1).collect()
+        } else {
+            avatar
+        };
         self.save_profile_patch(
             serde_json::json!({ "displayName": name, "workspace": workspace, "avatar": avatar }),
             "账户资料已更新",
@@ -2408,7 +3126,10 @@ impl AgentIdeApp {
                 .ok()
                 .and_then(|v| v.get("channels").and_then(|c| c.as_array()).cloned())
                 .unwrap_or_default();
-            let _ = tx.unbounded_send(AppMsg::Channels { providers, channels });
+            let _ = tx.unbounded_send(AppMsg::Channels {
+                providers,
+                channels,
+            });
         });
     }
 
@@ -2417,7 +3138,11 @@ impl AgentIdeApp {
         if self.channel_draft.is_some() {
             return;
         }
-        for (key, ph) in [("ch:name", "例如 DeepSeek 主力"), ("ch:base", "https://..."), ("ch:key", "sk-...")] {
+        for (key, ph) in [
+            ("ch:name", "例如 DeepSeek 主力"),
+            ("ch:base", "https://..."),
+            ("ch:key", "sk-..."),
+        ] {
             let input = self.settings_input(key, ph, cx);
             input.update(cx, |i, cx| i.set_text("", cx));
         }
@@ -2439,8 +3164,17 @@ impl AgentIdeApp {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        let name = ch.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let base = ch.get("baseUrl").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let name = ch
+            .get("label")
+            .or_else(|| ch.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let base = ch
+            .get("baseUrl")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         for (key, ph, val) in [
             ("ch:name", "例如 DeepSeek 主力", name),
             ("ch:base", "https://...", base),
@@ -2451,9 +3185,19 @@ impl AgentIdeApp {
         }
         let mut enabled_flags = Vec::new();
         for (i, m) in models.iter().enumerate() {
-            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let mname = m.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let id_input = self.settings_input(&format!("ch:m{i}:id"), "模型 ID（如 deepseek-chat）", cx);
+            let id = m
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let mname = m
+                .get("label")
+                .or_else(|| m.get("name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let id_input =
+                self.settings_input(&format!("ch:m{i}:id"), "模型 ID（如 deepseek-chat）", cx);
             id_input.update(cx, |inp, cx| inp.set_text(id, cx));
             let name_input = self.settings_input(&format!("ch:m{i}:name"), "显示名（可选）", cx);
             name_input.update(cx, |inp, cx| inp.set_text(mname, cx));
@@ -2461,8 +3205,16 @@ impl AgentIdeApp {
         }
         self.channel_draft = Some(ChannelDraft {
             id: ch.get("id").and_then(|v| v.as_str()).map(str::to_string),
-            provider: ch.get("provider").and_then(|v| v.as_str()).unwrap_or("custom").to_string(),
-            api_key_set: ch.get("apiKeySet").and_then(|v| v.as_bool()).unwrap_or(false),
+            provider: ch
+                .get("providerType")
+                .or_else(|| ch.get("provider"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("openai_compatible")
+                .to_string(),
+            api_key_set: ch
+                .get("apiKeySet")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false),
             enabled: ch.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true),
             model_enabled: enabled_flags,
             fetching_models: false,
@@ -2488,13 +3240,14 @@ impl AgentIdeApp {
             }
             models.push(serde_json::json!({
                 "id": id,
-                "name": read(&format!("ch:m{i}:name")),
+                "label": read(&format!("ch:m{i}:name")),
                 "enabled": enabled,
+                "supportsReasoning": false,
             }));
         }
         let mut payload = serde_json::json!({
-            "name": if name.is_empty() { draft.provider.clone() } else { name },
-            "provider": draft.provider,
+            "label": if name.is_empty() { draft.provider.clone() } else { name },
+            "providerType": draft.provider,
             "baseUrl": read("ch:base"),
             "models": models,
             "enabled": draft.enabled,
@@ -2509,7 +3262,9 @@ impl AgentIdeApp {
     /// 保存渠道 (create or update) and refresh the list.
     pub(crate) fn save_channel(&mut self, cx: &mut Context<Self>) {
         let Some(handle) = RUNTIME.get() else { return };
-        let Some(draft) = &self.channel_draft else { return };
+        let Some(draft) = &self.channel_draft else {
+            return;
+        };
         if draft.provider.is_empty() {
             self.toast("请选择供应商", ToastKind::Error, cx);
             return;
@@ -2544,11 +3299,21 @@ impl AgentIdeApp {
     /// Row toggle: PUT the channel back with `enabled` flipped.
     pub(crate) fn toggle_channel_enabled(&mut self, ch: serde_json::Value, cx: &mut Context<Self>) {
         let Some(handle) = RUNTIME.get() else { return };
-        let Some(id) = ch.get("id").and_then(|v| v.as_str()).map(str::to_string) else { return };
+        let Some(id) = ch.get("id").and_then(|v| v.as_str()).map(str::to_string) else {
+            return;
+        };
         let enabled = ch.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
         let mut payload = serde_json::json!({
-            "name": ch.get("name").cloned().unwrap_or_default(),
-            "provider": ch.get("provider").cloned().unwrap_or_default(),
+            "label": ch
+                .get("label")
+                .or_else(|| ch.get("name"))
+                .cloned()
+                .unwrap_or_default(),
+            "providerType": ch
+                .get("providerType")
+                .or_else(|| ch.get("provider"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::String("openai_compatible".into())),
             "baseUrl": ch.get("baseUrl").cloned().unwrap_or_default(),
             "models": ch.get("models").cloned().unwrap_or(serde_json::json!([])),
             "enabled": !enabled,
@@ -2570,7 +3335,8 @@ impl AgentIdeApp {
                     let _ = tx.unbounded_send(AppMsg::ChannelsList(channels));
                 }
                 Err(err) => {
-                    let _ = tx.unbounded_send(AppMsg::SettingsToast(format!("切换失败:{err}"), false));
+                    let _ =
+                        tx.unbounded_send(AppMsg::SettingsToast(format!("切换失败:{err}"), false));
                 }
             }
         });
@@ -2597,7 +3363,8 @@ impl AgentIdeApp {
                     let _ = tx.unbounded_send(AppMsg::ChannelsList(channels));
                 }
                 Err(err) => {
-                    let _ = tx.unbounded_send(AppMsg::SettingsToast(format!("删除失败:{err}"), false));
+                    let _ =
+                        tx.unbounded_send(AppMsg::SettingsToast(format!("删除失败:{err}"), false));
                 }
             }
         });
@@ -2605,8 +3372,15 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn add_model_row(&mut self, cx: &mut Context<Self>) {
-        let idx = self.channel_draft.as_ref().map(|d| d.model_enabled.len()).unwrap_or(0);
-        for (suffix, ph) in [("id", "模型 ID（如 deepseek-chat）"), ("name", "显示名（可选）")] {
+        let idx = self
+            .channel_draft
+            .as_ref()
+            .map(|d| d.model_enabled.len())
+            .unwrap_or(0);
+        for (suffix, ph) in [
+            ("id", "模型 ID（如 deepseek-chat）"),
+            ("name", "显示名（可选）"),
+        ] {
             let input = self.settings_input(&format!("ch:m{idx}:{suffix}"), ph, cx);
             input.update(cx, |i, cx| i.set_text("", cx));
         }
@@ -2617,7 +3391,9 @@ impl AgentIdeApp {
     }
 
     pub(crate) fn remove_model_row(&mut self, idx: usize, cx: &mut Context<Self>) {
-        let Some(draft) = &mut self.channel_draft else { return };
+        let Some(draft) = &mut self.channel_draft else {
+            return;
+        };
         if idx >= draft.model_enabled.len() {
             return;
         }
@@ -2642,18 +3418,24 @@ impl AgentIdeApp {
     /// 「从供应商获取」: POST channels:fetch-models with the current form.
     pub(crate) fn fetch_channel_models(&mut self, cx: &mut Context<Self>) {
         let Some(handle) = RUNTIME.get() else { return };
-        let Some(draft) = &self.channel_draft else { return };
+        let Some(draft) = &self.channel_draft else {
+            return;
+        };
         let key = self
             .settings_inputs
             .get("ch:key")
             .map(|i| i.read(cx).text().trim().to_string())
             .unwrap_or_default();
         if key.is_empty() && !draft.api_key_set {
-            self.toast("请先输入 API Key，或保存渠道后再获取模型列表", ToastKind::Error, cx);
+            self.toast(
+                "请先输入 API Key，或保存渠道后再获取模型列表",
+                ToastKind::Error,
+                cx,
+            );
             return;
         }
         let mut payload = serde_json::json!({
-            "provider": draft.provider,
+            "providerType": draft.provider,
             "baseUrl": self
                 .settings_inputs
                 .get("ch:base")
@@ -2682,7 +3464,8 @@ impl AgentIdeApp {
                                 .filter_map(|m| {
                                     let id = m.get("id")?.as_str()?.to_string();
                                     let name = m
-                                        .get("name")
+                                        .get("label")
+                                        .or_else(|| m.get("name"))
                                         .and_then(|v| v.as_str())
                                         .unwrap_or(&id)
                                         .to_string();
@@ -2715,7 +3498,8 @@ impl AgentIdeApp {
     ) {
         let mut flags = Vec::new();
         for (i, (id, name, enabled)) in models.into_iter().enumerate() {
-            let id_input = self.settings_input(&format!("ch:m{i}:id"), "模型 ID（如 deepseek-chat）", cx);
+            let id_input =
+                self.settings_input(&format!("ch:m{i}:id"), "模型 ID（如 deepseek-chat）", cx);
             id_input.update(cx, |inp, cx| inp.set_text(id, cx));
             let name_input = self.settings_input(&format!("ch:m{i}:name"), "显示名（可选）", cx);
             name_input.update(cx, |inp, cx| inp.set_text(name, cx));
@@ -2746,7 +3530,9 @@ impl AgentIdeApp {
     /// 「保存 Tavily 配置」.
     pub(crate) fn save_tavily(&mut self, cx: &mut Context<Self>) {
         let Some(handle) = RUNTIME.get() else { return };
-        let Some(draft) = self.tavily.clone() else { return };
+        let Some(draft) = self.tavily.clone() else {
+            return;
+        };
         let api_key = self
             .settings_inputs
             .get("tavily:key")
@@ -2779,6 +3565,19 @@ impl AgentIdeApp {
 
     // ---- 规则页: 已发现技能 -------------------------------------------------------
 
+    fn dedupe_skill_items(items: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+        let mut seen = std::collections::HashSet::new();
+        items
+            .into_iter()
+            .filter(|item| {
+                item.get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|name| seen.insert(name.to_string()))
+                    .unwrap_or(false)
+            })
+            .collect()
+    }
+
     pub(crate) fn load_skills(&mut self) {
         let Some(handle) = RUNTIME.get() else { return };
         self.skills_loading = true;
@@ -2793,6 +3592,43 @@ impl AgentIdeApp {
                 .unwrap_or_default();
             let _ = tx.unbounded_send(AppMsg::Skills(items));
         });
+    }
+
+    // ---- 记忆页 -----------------------------------------------------------------
+
+    pub(crate) fn load_memories(&mut self) {
+        let Some(handle) = RUNTIME.get() else { return };
+        let api = self.api.clone();
+        let tx = self.tx.clone();
+        handle.spawn(async move {
+            let items = api
+                .list_memories(None)
+                .await
+                .ok()
+                .and_then(|v| v.get("memories").and_then(|i| i.as_array()).cloned())
+                .unwrap_or_default();
+            let _ = tx.unbounded_send(AppMsg::MemoriesLoaded(items));
+        });
+    }
+
+    pub(crate) fn delete_memory_entry(&mut self, id: String, cx: &mut Context<Self>) {
+        self.memories
+            .retain(|m| m.get("id").and_then(|v| v.as_str()) != Some(id.as_str()));
+        if let Some(handle) = RUNTIME.get() {
+            let api = self.api.clone();
+            let tx = self.tx.clone();
+            handle.spawn(async move {
+                match api.delete_memory(&id).await {
+                    Ok(_) => {
+                        let _ = tx.unbounded_send(AppMsg::Status("已删除记忆".into()));
+                    }
+                    Err(err) => {
+                        let _ = tx.unbounded_send(AppMsg::Status(format!("删除记忆失败: {err}")));
+                    }
+                }
+            });
+        }
+        cx.notify();
     }
 
     /// 预览/收起 a discovered skill, lazily reading its SKILL.md.
@@ -2852,7 +3688,10 @@ impl AgentIdeApp {
                 .map(str::to_string);
             match &f.kind {
                 CrudFieldKind::Select(options) => {
-                    let default = options.first().map(|(v, _)| v.to_string()).unwrap_or_default();
+                    let default = options
+                        .first()
+                        .map(|(v, _)| v.to_string())
+                        .unwrap_or_default();
                     selects.insert(f.key, value.unwrap_or(default));
                 }
                 _ => {
@@ -2877,7 +3716,9 @@ impl AgentIdeApp {
 
     /// CRUD modal「保存」: validate required fields, write the store array.
     pub(crate) fn save_crud(&mut self, cx: &mut Context<Self>) {
-        let Some(state) = &self.crud_modal else { return };
+        let Some(state) = &self.crud_modal else {
+            return;
+        };
         let mut entry = serde_json::Map::new();
         let mut missing = Vec::new();
         for f in state.fields {
@@ -2895,7 +3736,11 @@ impl AgentIdeApp {
             entry.insert(f.key.to_string(), serde_json::Value::String(value));
         }
         if !missing.is_empty() {
-            self.toast(format!("请填写：{}", missing.join("、")), ToastKind::Error, cx);
+            self.toast(
+                format!("请填写：{}", missing.join("、")),
+                ToastKind::Error,
+                cx,
+            );
             return;
         }
         let storage_key = state.storage_key.clone();
@@ -2954,8 +3799,14 @@ fn tavily_from_config(config: &serde_json::Value) -> TavilyDraft {
             .to_string()
     };
     TavilyDraft {
-        enabled: config.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false),
-        api_key_set: config.get("apiKeySet").and_then(|v| v.as_bool()).unwrap_or(false),
+        enabled: config
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        api_key_set: config
+            .get("apiKeySet")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         topic: s("topic", "general"),
         search_depth: s("searchDepth", "basic"),
         time_range: s("timeRange", ""),
@@ -3035,7 +3886,8 @@ impl Render for AgentIdeApp {
                             ])
                             .unwrap_or_default();
                             let _ = store.set_string(keys::PANE_SIZES, sizes);
-                            let _ = store.set_string(keys::BOTTOM_HEIGHT, format!("{}", this.bottom_h));
+                            let _ =
+                                store.set_string(keys::BOTTOM_HEIGHT, format!("{}", this.bottom_h));
                         }
                         cx.notify();
                     }
@@ -3132,6 +3984,12 @@ impl AgentIdeApp {
     }
 }
 
+/// Sidecar IR and generated HTML previews — not user-facing workspace files.
+pub(crate) fn is_workspace_internal_artifact(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".ir.json") || lower.ends_with("-preview.html")
+}
+
 /// Map a backend `GET /workspace/tree` payload (flat entry list) into
 /// [`WorkspaceNode`]s. Hidden entries are skipped; directories stay collapsed
 /// like the legacy tree's initial state.
@@ -3143,13 +4001,27 @@ pub(crate) fn parse_backend_tree(tree: &serde_json::Value) -> Vec<WorkspaceNode>
         .iter()
         .filter_map(|e| {
             let name = e.get("name")?.as_str()?.to_string();
-            let rel = e.get("relPath").and_then(|v| v.as_str()).unwrap_or(&name).to_string();
+            let rel = e
+                .get("relPath")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&name)
+                .to_string();
+            if is_workspace_internal_artifact(&rel) {
+                return None;
+            }
             let is_dir = e.get("kind").and_then(|v| v.as_str()) == Some("dir");
-            let git = e.get("gitStatus").and_then(|v| v.as_str()).map(str::to_string);
+            let git = e
+                .get("gitStatus")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
             Some(WorkspaceNode {
                 name,
                 path: rel,
-                kind: if is_dir { WorkspaceNodeKind::Directory } else { WorkspaceNodeKind::File },
+                kind: if is_dir {
+                    WorkspaceNodeKind::Directory
+                } else {
+                    WorkspaceNodeKind::File
+                },
                 children: Vec::new(),
                 git,
             })
@@ -3173,7 +4045,13 @@ pub(crate) fn build_tree(dir: &std::path::Path, depth: usize) -> Vec<WorkspaceNo
     let mut nodes = Vec::new();
     for entry in entries.into_iter().take(200) {
         let name = entry.file_name().to_string_lossy().to_string();
-        if matches!(name.as_str(), "target" | ".git" | "node_modules" | "dist" | ".next") {
+        if matches!(
+            name.as_str(),
+            "target" | ".git" | "node_modules" | "dist" | ".next"
+        ) {
+            continue;
+        }
+        if is_workspace_internal_artifact(&name) {
             continue;
         }
         let path = entry.path();
@@ -3181,8 +4059,16 @@ pub(crate) fn build_tree(dir: &std::path::Path, depth: usize) -> Vec<WorkspaceNo
         nodes.push(WorkspaceNode {
             name,
             path: path.to_string_lossy().to_string(),
-            kind: if is_dir { WorkspaceNodeKind::Directory } else { WorkspaceNodeKind::File },
-            children: if is_dir { build_tree(&path, depth + 1) } else { Vec::new() },
+            kind: if is_dir {
+                WorkspaceNodeKind::Directory
+            } else {
+                WorkspaceNodeKind::File
+            },
+            children: if is_dir {
+                build_tree(&path, depth + 1)
+            } else {
+                Vec::new()
+            },
             git: None,
         });
     }

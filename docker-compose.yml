@@ -2,7 +2,9 @@
 # Public surface is the Go gateway on :8002 (same contract as the old Python service).
 services:
   agentd:
-    build: ./backend-rs
+    build:
+      context: .
+      dockerfile: backend-rs/Dockerfile
     environment:
       AGENT_DEBUG_HOST: "0.0.0.0"
       AGENT_CORE_PORT: "8003"

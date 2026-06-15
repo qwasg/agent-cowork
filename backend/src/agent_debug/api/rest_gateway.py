@@ -1525,12 +1525,6 @@ class AgentDebugRestGateway:
         composer_mode: str | None = None,
     ) -> Dict[str, Any]:
         self.sessions.auto_title_from_input(session_id, user_input)
-        # Mode dispatch:
-        # - explicit ``build|debug|ask|multitask`` → chat composer (single-shot)
-        # - ``plan`` OR no mode supplied → plan+execute (legacy default)
-        # This keeps ``ask_execute(session, text)`` backward-compatible with the
-        # original "always plan" call shape while letting the IDE pick chat
-        # modes when the user is in build/debug/ask mode.
         runtime_mode = normalize_composer_runtime_mode(composer_mode)
         if composer_mode is not None and runtime_mode != "plan":
             out = await self._ask_composer_message(
@@ -1541,11 +1535,18 @@ class AgentDebugRestGateway:
             )
             return {**out, "composerMode": runtime_mode}
 
+        # Composer plan mode: generate a reviewable plan and wait for the user
+        # to call ``plan:execute``. Legacy callers that omit ``composerMode``
+        # still get the historical plan+auto-execute behaviour.
         plan_bundle = await self.generate_plan(session_id, user_input, context_window=context_window)
+        rendered = self._render_plan_bundle(plan_bundle)
+        if composer_mode is not None and runtime_mode == "plan":
+            return {**rendered, "composerMode": "plan"}
+
         plan_id = str(plan_bundle.get("plan", {}).get("id", ""))
         run_result = await self.execute_plan(plan_id)
         return {
-            **plan_bundle,
+            **rendered,
             "run": run_result.get("run"),
             "outcome": run_result.get("outcome"),
             "composerMode": "plan",

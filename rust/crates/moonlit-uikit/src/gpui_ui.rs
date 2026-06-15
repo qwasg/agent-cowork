@@ -7,6 +7,7 @@
 
 use std::ops::Range;
 
+use gpui::actions;
 use gpui::{
     div, fill, hsla, point, prelude::*, px, relative, rgb, rgba, size, App, Bounds, ClipboardItem,
     Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
@@ -14,7 +15,6 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Rgba, ShapedLine, SharedString, Style,
     TextRun, UTF16Selection, UnderlineStyle, Window,
 };
-use gpui::actions;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{Theme, ToastKind};
@@ -73,6 +73,8 @@ pub struct Tokens {
     pub bg: Rgba,
     pub bg_sunk: Rgba,
     pub bg_panel: Rgba,
+    /// Floating popover/dropdown surface (may differ from `bg_panel` when glass is enabled).
+    pub bg_float: Rgba,
     pub bg_input: Rgba,
     pub bg_hover: Rgba,
     pub bg_active: Rgba,
@@ -116,23 +118,24 @@ impl Tokens {
             bg: rgb(0xfaf9f5),
             bg_sunk: rgb(0xf3f1e9),
             bg_panel: rgb(0xffffff),
+            bg_float: rgb(0xffffff),
             bg_input: rgb(0xffffff),
-            bg_hover: rgba(0x2a27240a),      // rgba(42,39,36,0.04)
-            bg_active: rgba(0x2a272412),     // rgba(42,39,36,0.07)
-            bg_selection: rgba(0xc9644217),  // rgba(201,100,66,0.09)
+            bg_hover: rgba(0x2a27240a),     // rgba(42,39,36,0.04)
+            bg_active: rgba(0x2a272412),    // rgba(42,39,36,0.07)
+            bg_selection: rgba(0xc9644217), // rgba(201,100,66,0.09)
             text: rgb(0x2a2724),
             text_2: rgb(0x5a564f),
             text_3: rgb(0x8a857c),
             text_4: rgb(0xb3ad9f),
             text_inv: rgb(0xfaf9f5),
-            line: rgba(0x2a272417),          // rgba(42,39,36,0.09)
-            line_strong: rgba(0x2a272424),   // rgba(42,39,36,0.14)
+            line: rgba(0x2a272417),        // rgba(42,39,36,0.09)
+            line_strong: rgba(0x2a272424), // rgba(42,39,36,0.14)
             accent: rgb(0xc96442),
             accent_soft: rgb(0xe2886a),
-            accent_bg: rgba(0xc9644214),     // rgba(201,100,66,0.08)
-            accent_ring: rgba(0xc9644247),   // rgba(201,100,66,0.28)
+            accent_bg: rgba(0xc9644214),   // rgba(201,100,66,0.08)
+            accent_ring: rgba(0xc9644247), // rgba(201,100,66,0.28)
             sage: rgb(0x6a8f7a),
-            sage_bg: rgba(0x6a8f7a1a),       // rgba(106,143,122,0.10)
+            sage_bg: rgba(0x6a8f7a1a), // rgba(106,143,122,0.10)
             danger: rgb(0xb4503b),
             danger_bg: rgba(0xb4503b14),
             warn: rgb(0xb28632),
@@ -153,21 +156,22 @@ impl Tokens {
             bg: rgb(0x1c1b18),
             bg_sunk: rgb(0x181715),
             bg_panel: rgb(0x232220),
+            bg_float: rgb(0x232220),
             bg_input: rgb(0x232220),
-            bg_hover: rgba(0xffffff0d),      // rgba(255,255,255,0.05)
-            bg_active: rgba(0xffffff14),     // rgba(255,255,255,0.08)
-            bg_selection: rgba(0xe2886a29),  // rgba(226,136,106,0.16)
+            bg_hover: rgba(0xffffff0d),     // rgba(255,255,255,0.05)
+            bg_active: rgba(0xffffff14),    // rgba(255,255,255,0.08)
+            bg_selection: rgba(0xe2886a29), // rgba(226,136,106,0.16)
             text: rgb(0xece8df),
             text_2: rgb(0xb8b3a7),
             text_3: rgb(0x8a857c),
             text_4: rgb(0x5a564f),
             text_inv: rgb(0x1c1b18),
-            line: rgba(0xffffff12),          // rgba(255,255,255,0.07)
-            line_strong: rgba(0xffffff21),   // rgba(255,255,255,0.13)
+            line: rgba(0xffffff12),        // rgba(255,255,255,0.07)
+            line_strong: rgba(0xffffff21), // rgba(255,255,255,0.13)
             accent: rgb(0xe2886a),
             accent_soft: rgb(0xf0a586),
-            accent_bg: rgba(0xe2886a24),     // rgba(226,136,106,0.14)
-            accent_ring: rgba(0xe2886a6b),   // rgba(226,136,106,0.42)
+            accent_bg: rgba(0xe2886a24),   // rgba(226,136,106,0.14)
+            accent_ring: rgba(0xe2886a6b), // rgba(226,136,106,0.42)
             sage: rgb(0x8eb39d),
             sage_bg: rgba(0x8eb39d21),
             danger: rgb(0xd97a63),
@@ -197,8 +201,8 @@ impl Tokens {
 }
 
 /// Font stacks from the legacy frontend (with Windows fallbacks).
-pub const FONT_SANS: &str = "Inter";
-pub const FONT_SANS_FALLBACK: &str = "Segoe UI";
+pub const FONT_SANS: &str = "HarmonyOS Sans SC";
+pub const FONT_SANS_FALLBACK: &str = "Microsoft YaHei UI";
 pub const FONT_SERIF: &str = "Noto Serif SC";
 pub const FONT_MONO: &str = "JetBrains Mono";
 pub const FONT_MONO_FALLBACK: &str = "Consolas";
@@ -271,7 +275,11 @@ pub struct TextInput {
 impl EventEmitter<TextInputEvent> for TextInput {}
 
 impl TextInput {
-    pub fn new(cx: &mut Context<Self>, initial: impl Into<SharedString>, placeholder: impl Into<SharedString>) -> Self {
+    pub fn new(
+        cx: &mut Context<Self>,
+        initial: impl Into<SharedString>,
+        placeholder: impl Into<SharedString>,
+    ) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
             content: initial.into(),
@@ -359,7 +367,11 @@ impl TextInput {
     }
 
     /// Update the placeholder (e.g. when the composer mode changes).
-    pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>, cx: &mut Context<Self>) {
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.placeholder = placeholder.into();
         cx.notify();
     }
@@ -378,7 +390,12 @@ impl TextInput {
         self.replace_text_in_range(None, "", window, cx)
     }
 
-    fn on_mouse_down(&mut self, event: &MouseDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.is_selecting = true;
         if event.modifiers.shift {
             self.select_to(self.index_for_mouse_position(event.position), cx);
@@ -437,7 +454,8 @@ impl TextInput {
         if self.content.is_empty() {
             return 0;
         }
-        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref()) else {
+        let (Some(bounds), Some(line)) = (self.last_bounds.as_ref(), self.last_layout.as_ref())
+        else {
             return 0;
         };
         if position.y < bounds.top() {
@@ -537,8 +555,14 @@ impl EntityInputHandler for TextInput {
         })
     }
 
-    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
-        self.marked_range.as_ref().map(|range| self.range_to_utf16(range))
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.marked_range
+            .as_ref()
+            .map(|range| self.range_to_utf16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -558,7 +582,8 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
         self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
+            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
+                .into();
         self.selected_range = range.start + new_text.len()..range.start + new_text.len();
         self.marked_range.take();
         cx.notify();
@@ -579,7 +604,8 @@ impl EntityInputHandler for TextInput {
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
         self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..]).into();
+            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
+                .into();
         if !new_text.is_empty() {
             self.marked_range = Some(range.start..range.start + new_text.len());
         } else {
@@ -604,8 +630,14 @@ impl EntityInputHandler for TextInput {
         let last_layout = self.last_layout.as_ref()?;
         let range = self.range_from_utf16(&range_utf16);
         Some(Bounds::from_corners(
-            point(bounds.left() + last_layout.x_for_index(range.start), bounds.top()),
-            point(bounds.left() + last_layout.x_for_index(range.end), bounds.bottom()),
+            point(
+                bounds.left() + last_layout.x_for_index(range.start),
+                bounds.top(),
+            ),
+            point(
+                bounds.left() + last_layout.x_for_index(range.end),
+                bounds.bottom(),
+            ),
         ))
     }
 
@@ -695,7 +727,10 @@ impl Element for TextElement {
         };
         let runs = if let Some(marked_range) = input.marked_range.as_ref() {
             vec![
-                TextRun { len: marked_range.start, ..run.clone() },
+                TextRun {
+                    len: marked_range.start,
+                    ..run.clone()
+                },
                 TextRun {
                     len: marked_range.end - marked_range.start,
                     underline: Some(UnderlineStyle {
@@ -705,7 +740,10 @@ impl Element for TextElement {
                     }),
                     ..run.clone()
                 },
-                TextRun { len: display_text.len() - marked_range.end, ..run },
+                TextRun {
+                    len: display_text.len() - marked_range.end,
+                    ..run
+                },
             ]
             .into_iter()
             .filter(|run| run.len > 0)
@@ -714,7 +752,9 @@ impl Element for TextElement {
             vec![run]
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window.text_system().shape_line(display_text, font_size, &runs, None);
+        let line = window
+            .text_system()
+            .shape_line(display_text, font_size, &runs, None);
         let cursor_pos = line.x_for_index(cursor);
         let (selection, cursor) = if selected_range.is_empty() {
             (
@@ -731,15 +771,25 @@ impl Element for TextElement {
             (
                 Some(fill(
                     Bounds::from_corners(
-                        point(bounds.left() + line.x_for_index(selected_range.start), bounds.top()),
-                        point(bounds.left() + line.x_for_index(selected_range.end), bounds.bottom()),
+                        point(
+                            bounds.left() + line.x_for_index(selected_range.start),
+                            bounds.top(),
+                        ),
+                        point(
+                            bounds.left() + line.x_for_index(selected_range.end),
+                            bounds.bottom(),
+                        ),
                     ),
                     selection_color,
                 )),
                 None,
             )
         };
-        PrepaintState { line: Some(line), cursor, selection }
+        PrepaintState {
+            line: Some(line),
+            cursor,
+            selection,
+        }
     }
 
     fn paint(
@@ -753,12 +803,17 @@ impl Element for TextElement {
         cx: &mut App,
     ) {
         let focus_handle = self.input.read(cx).focus_handle.clone();
-        window.handle_input(&focus_handle, ElementInputHandler::new(bounds, self.input.clone()), cx);
+        window.handle_input(
+            &focus_handle,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
         if let Some(selection) = prepaint.selection.take() {
             window.paint_quad(selection)
         }
         let line = prepaint.line.take().unwrap();
-        line.paint(bounds.origin, window.line_height(), window, cx).unwrap();
+        line.paint(bounds.origin, window.line_height(), window, cx)
+            .unwrap();
         if focus_handle.is_focused(window) {
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);

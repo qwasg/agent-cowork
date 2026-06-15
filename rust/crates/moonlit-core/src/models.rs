@@ -53,6 +53,10 @@ pub struct DebugSession {
     pub status: Option<String>,
     #[serde(default)]
     pub mode: Option<String>,
+    /// Agent profile: general / document / coding. Absent for legacy rows
+    /// (treated as coding).
+    #[serde(default)]
+    pub agent_kind: Option<String>,
     #[serde(default)]
     pub selected_model_id: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -88,7 +92,10 @@ impl DebugSession {
         if title == "新会话" {
             return true;
         }
-        if matches!(title.as_str(), "" | "agent debug session" | "新的 agent debug 会话") {
+        if matches!(
+            title.as_str(),
+            "" | "agent debug session" | "新的 agent debug 会话"
+        ) {
             return true;
         }
         if title.starts_with("分支 · demo") {

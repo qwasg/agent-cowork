@@ -8,16 +8,19 @@ use async_trait::async_trait;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 
-use crate::contracts::models::{ChatMessage, ToolCall};
-use crate::contracts::ApiError;
-use crate::contracts::ApiResult;
-use crate::provider::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent, Usage};
-use crate::provider::LLMProvider;
+use crate::types::{DeltaSink, ProviderRequest, ProviderResponse, StreamEvent, Usage};
+use crate::LLMProvider;
+use agent_protocol::models::{ChatMessage, ToolCall};
+use agent_protocol::ApiError;
+use agent_protocol::ApiResult;
 
 pub struct OpenAiCompatProvider {
     name: String,
     base_url: String,
     api_key: String,
+    /// Vendor type ("openai" / "deepseek" / "qwen" / "zhipu" / …) used to
+    /// pick the right thinking-mode request fields.
+    provider_type: String,
     client: reqwest::Client,
 }
 
@@ -32,6 +35,7 @@ impl OpenAiCompatProvider {
             name: name.into(),
             base_url: base_url.into(),
             api_key: api_key.into(),
+            provider_type: "openai".to_string(),
             client: reqwest::Client::builder()
                 .pool_max_idle_per_host(8)
                 .connect_timeout(std::time::Duration::from_secs(10))
@@ -39,6 +43,11 @@ impl OpenAiCompatProvider {
                 .build()
                 .unwrap_or_else(|_| reqwest::Client::new()),
         }
+    }
+
+    pub fn with_provider_type(mut self, provider_type: impl Into<String>) -> Self {
+        self.provider_type = provider_type.into();
+        self
     }
 
     fn endpoint(&self) -> String {
@@ -60,6 +69,19 @@ impl OpenAiCompatProvider {
         }
         if !req.tools.is_empty() {
             body["tools"] = Value::Array(req.tools.iter().map(|t| t.to_openai_json()).collect());
+        }
+        // Vendor-specific thinking fields. Streaming requests enable thinking
+        // when the model supports it (reasoning deltas flow back as
+        // `reasoning_content`); non-streaming requests follow the vendor's
+        // disable strategy (some require an explicit `disabled`).
+        use crate::thinking::{
+            apply_thinking_to_openai_request, detect_thinking_capability, DisableStrategy,
+        };
+        let cap = detect_thinking_capability(&self.provider_type, &req.model);
+        if cap.supports_thinking() && req.stream {
+            apply_thinking_to_openai_request(&mut body, cap, true);
+        } else if cap.disable_strategy == DisableStrategy::ExplicitDisabled {
+            apply_thinking_to_openai_request(&mut body, cap, false);
         }
         body
     }
@@ -298,7 +320,7 @@ pub(crate) fn assemble(
         .filter_map(|(id, name, args)| {
             let name = name?;
             Some(ToolCall {
-                id: id.unwrap_or_else(|| crate::contracts::models::new_id("call")),
+                id: id.unwrap_or_else(|| agent_protocol::models::new_id("call")),
                 kind: "function".to_string(),
                 name,
                 arguments: if args.is_empty() {
@@ -337,6 +359,10 @@ pub(crate) fn parse_usage(usage: Option<&Value>) -> Usage {
             .unwrap_or(0) as u32,
         total_tokens: usage
             .and_then(|u| u.get("total_tokens"))
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0) as u32,
+        cache_read_tokens: usage
+            .and_then(|u| u.pointer("/prompt_tokens_details/cached_tokens"))
             .and_then(|n| n.as_u64())
             .unwrap_or(0) as u32,
     }
@@ -405,9 +431,124 @@ fn parse_full_response(v: &Value, provider: &str, model: &str) -> ProviderRespon
 }
 
 #[cfg(test)]
+mod http_tests {
+    //! HTTP-boundary tests against a local mock server (JSON + SSE paths).
+
+    use super::*;
+    use std::sync::{Arc as StdArc, Mutex};
+
+    async fn serve(
+        response: axum::response::Response<axum::body::Body>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use axum::routing::post;
+        let resp = StdArc::new(Mutex::new(Some(response)));
+        let app = axum::Router::new().route(
+            "/chat/completions",
+            post(move || {
+                let resp = resp.clone();
+                async move { resp.lock().unwrap().take().expect("single-shot mock") }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    fn req(stream: bool) -> ProviderRequest {
+        ProviderRequest {
+            model: "test-model".to_string(),
+            messages: vec![ChatMessage::user("hi")],
+            tools: vec![],
+            temperature: None,
+            stream,
+            max_tokens: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn non_stream_parses_text_and_cached_usage() {
+        let body = serde_json::json!({
+            "choices": [{ "message": { "content": "回答" }, "finish_reason": "stop" }],
+            "usage": {
+                "prompt_tokens": 120,
+                "completion_tokens": 8,
+                "total_tokens": 128,
+                "prompt_tokens_details": { "cached_tokens": 100 }
+            }
+        });
+        let resp = axum::response::Response::builder()
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(body.to_string()))
+            .unwrap();
+        let (base, server) = serve(resp).await;
+
+        let provider = OpenAiCompatProvider::new("test", base, "k", 10);
+        let sink = crate::types::noop_sink();
+        let out = provider.chat(&req(false), &sink).await.unwrap();
+        assert_eq!(out.text, "回答");
+        assert_eq!(out.usage.prompt_tokens, 120);
+        assert_eq!(out.usage.total_tokens, 128);
+        assert_eq!(out.usage.cache_read_tokens, 100);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_parses_sse_and_emits_tool_arg_deltas() {
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"思\"}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"grep\",\"arguments\":\"{\\\"q\\\":\"}}]}}]}\n\n\
+data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"x\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n\
+data: [DONE]\n\n";
+        let resp = axum::response::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(axum::body::Body::from(sse))
+            .unwrap();
+        let (base, server) = serve(resp).await;
+
+        let provider = OpenAiCompatProvider::new("test", base, "k", 10);
+        let events: StdArc<Mutex<Vec<StreamEvent>>> = StdArc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let sink = move |ev: StreamEvent| captured.lock().unwrap().push(ev);
+        let out = provider.chat(&req(true), &sink).await.unwrap();
+
+        assert_eq!(out.tool_calls.len(), 1);
+        assert_eq!(out.tool_calls[0].name, "grep");
+        assert_eq!(out.tool_calls[0].arguments, r#"{"q":"x"}"#);
+        assert_eq!(out.usage.total_tokens, 15);
+        let events = events.lock().unwrap();
+        // Tool-call argument deltas streamed incrementally to the sink.
+        let tool_deltas = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ToolCall { .. }))
+            .count();
+        assert!(tool_deltas >= 2, "got {tool_deltas} tool deltas");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn http_error_status_is_a_provider_error() {
+        let resp = axum::response::Response::builder()
+            .status(500)
+            .body(axum::body::Body::from("kaboom"))
+            .unwrap();
+        let (base, server) = serve(resp).await;
+        let provider = OpenAiCompatProvider::new("test", base, "k", 10);
+        let sink = crate::types::noop_sink();
+        let err = provider.chat(&req(false), &sink).await.unwrap_err();
+        assert_eq!(err.code, "PROVIDER_HTTP_ERROR");
+        assert!(err.message.contains("500"));
+        server.abort();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::types::noop_sink;
+    use crate::types::noop_sink;
 
     #[test]
     fn accumulates_text_and_merges_tool_call_deltas() {

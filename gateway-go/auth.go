@@ -35,6 +35,18 @@ func verifyJWT(token string, secret []byte) bool {
 		return false
 	}
 
+	// Defense-in-depth against alg-confusion: only HS256 self-issued tokens.
+	headerRaw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return false
+	}
+	var header struct {
+		Alg string `json:"alg"`
+	}
+	if json.Unmarshal(headerRaw, &header) != nil || header.Alg != "HS256" {
+		return false
+	}
+
 	payloadRaw, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
 		return false
@@ -43,6 +55,10 @@ func verifyJWT(token string, secret []byte) bool {
 		Exp int64 `json:"exp"`
 	}
 	if json.Unmarshal(payloadRaw, &claims) != nil {
+		return false
+	}
+	// Tokens without a (positive) exp are rejected.
+	if claims.Exp <= 0 {
 		return false
 	}
 	return time.Now().Unix() <= claims.Exp

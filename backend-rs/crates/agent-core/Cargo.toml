@@ -1,0 +1,34 @@
+[package]
+name = "agent-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Domain layer: sessions, auth, plan/todo engines, agent runtime"
+
+[dependencies]
+agent-protocol = { workspace = true }
+agent-config = { workspace = true }
+agent-store = { workspace = true }
+agent-providers = { workspace = true }
+agent-tools = { workspace = true }
+agent-mcp = { workspace = true }
+
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+futures = { workspace = true }
+futures-util = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+dunce = { workspace = true }
+
+# auth password hashing + JWT
+sha2 = { workspace = true }
+hmac = { workspace = true }
+pbkdf2 = { workspace = true }
+base64 = { workspace = true }
+rand = { workspace = true }

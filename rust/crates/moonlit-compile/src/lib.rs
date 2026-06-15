@@ -93,7 +93,15 @@ pub fn compile_job_key(job: &CompileJob) -> String {
         _ => serde_json::to_value(&job.ir).expect("IR serializes"),
     };
     let hash = moonlit_core::content_hash(&effective);
-    format!("{:?}:{}:{}", job.format, job.options.as_ref().and_then(|o| o.only_slide_id.as_deref()).unwrap_or(""), hash)
+    format!(
+        "{:?}:{}:{}",
+        job.format,
+        job.options
+            .as_ref()
+            .and_then(|o| o.only_slide_id.as_deref())
+            .unwrap_or(""),
+        hash
+    )
 }
 
 pub struct CompileQueue {
@@ -185,12 +193,17 @@ fn compile_word(ir: &DocIR) -> Result<Vec<u8>> {
                 document.push_str(&props);
                 document.push_str("</w:rPr>");
             }
-            document.push_str(&format!(r#"<w:t xml:space="preserve">{}</w:t>"#, xml(&run.text)));
+            document.push_str(&format!(
+                r#"<w:t xml:space="preserve">{}</w:t>"#,
+                xml(&run.text)
+            ));
             document.push_str("</w:r>");
         }
         document.push_str("</w:p>");
     }
-    document.push_str(r#"<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>"#);
+    document.push_str(
+        r#"<w:sectPr><w:pgSz w:w="11906" w:h="16838"/></w:sectPr></w:body></w:document>"#,
+    );
 
     let files = vec![
         ("[Content_Types].xml", r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>"#.to_string()),
@@ -257,11 +270,26 @@ fn compile_ppt(ir: &DocIR, options: Option<&CompileOptions>) -> Result<Vec<u8>> 
     all.push(("[Content_Types].xml".into(), ppt_content_types(slide_count)));
     all.push(("_rels/.rels".into(), r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>"#.into()));
     all.push(("ppt/presentation.xml".into(), ppt_presentation(slide_count)));
-    all.push(("ppt/_rels/presentation.xml.rels".into(), ppt_presentation_rels(slide_count)));
-    all.push(("ppt/slideMasters/slideMaster1.xml".into(), ppt_slide_master()));
-    all.push(("ppt/slideMasters/_rels/slideMaster1.xml.rels".into(), ppt_master_rels()));
-    all.push(("ppt/slideLayouts/slideLayout1.xml".into(), ppt_slide_layout()));
-    all.push(("ppt/slideLayouts/_rels/slideLayout1.xml.rels".into(), ppt_layout_rels()));
+    all.push((
+        "ppt/_rels/presentation.xml.rels".into(),
+        ppt_presentation_rels(slide_count),
+    ));
+    all.push((
+        "ppt/slideMasters/slideMaster1.xml".into(),
+        ppt_slide_master(),
+    ));
+    all.push((
+        "ppt/slideMasters/_rels/slideMaster1.xml.rels".into(),
+        ppt_master_rels(),
+    ));
+    all.push((
+        "ppt/slideLayouts/slideLayout1.xml".into(),
+        ppt_slide_layout(),
+    ));
+    all.push((
+        "ppt/slideLayouts/_rels/slideLayout1.xml.rels".into(),
+        ppt_layout_rels(),
+    ));
     all.push(("ppt/theme/theme1.xml".into(), ppt_theme()));
 
     for (idx, slide) in selected.iter().enumerate() {
@@ -277,7 +305,9 @@ fn compile_ppt(ir: &DocIR, options: Option<&CompileOptions>) -> Result<Vec<u8>> 
 }
 
 fn ppt_content_types(slide_count: usize) -> String {
-    let mut s = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>"#);
+    let mut s = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>"#,
+    );
     for idx in 1..=slide_count {
         s.push_str(&format!(r#"<Override PartName="/ppt/slides/slide{idx}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>"#));
     }
@@ -288,14 +318,22 @@ fn ppt_content_types(slide_count: usize) -> String {
 fn ppt_presentation(slide_count: usize) -> String {
     let mut ids = String::new();
     for idx in 1..=slide_count {
-        ids.push_str(&format!(r#"<p:sldId id="{}" r:id="rId{}"/>"#, 255 + idx, idx));
+        ids.push_str(&format!(
+            r#"<p:sldId id="{}" r:id="rId{}"/>"#,
+            255 + idx,
+            idx
+        ));
     }
     let master_rid = slide_count + 1;
-    format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId{master_rid}"/></p:sldMasterIdLst><p:sldIdLst>{ids}</p:sldIdLst><p:sldSz cx="9144000" cy="5143500" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#)
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId{master_rid}"/></p:sldMasterIdLst><p:sldIdLst>{ids}</p:sldIdLst><p:sldSz cx="9144000" cy="5143500" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    )
 }
 
 fn ppt_presentation_rels(slide_count: usize) -> String {
-    let mut rels = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+    let mut rels = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+    );
     for idx in 1..=slide_count {
         rels.push_str(&format!(r#"<Relationship Id="rId{idx}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide{idx}.xml"/>"#));
     }
@@ -325,7 +363,8 @@ fn ppt_slide_layout() -> String {
 }
 
 fn ppt_theme() -> String {
-    let scheme_color = |tag: &str, val: &str| format!(r#"<a:{tag}><a:srgbClr val="{val}"/></a:{tag}>"#);
+    let scheme_color =
+        |tag: &str, val: &str| format!(r#"<a:{tag}><a:srgbClr val="{val}"/></a:{tag}>"#);
     let clr = format!(
         r#"<a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>{}{}{}{}{}{}{}{}{}{}</a:clrScheme>"#,
         scheme_color("dk2", "44546A"),
@@ -350,7 +389,9 @@ fn ppt_theme() -> String {
 }
 
 fn ppt_slide(slide: &Slide) -> String {
-    let mut sp_tree = String::from(r#"<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"#);
+    let mut sp_tree = String::from(
+        r#"<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"#,
+    );
     for (idx, el) in slide.elements.iter().enumerate() {
         let id = idx + 2;
         let text = el
@@ -358,7 +399,12 @@ fn ppt_slide(slide: &Slide) -> String {
             .get("text")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        let font_size = el.props.get("fontSize").and_then(|v| v.as_f64()).unwrap_or(18.0) * 100.0;
+        let font_size = el
+            .props
+            .get("fontSize")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(18.0)
+            * 100.0;
         sp_tree.push_str(&format!(
             r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="{}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="{}" y="{}"/><a:ext cx="{}" cy="{}"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="{}"/><a:t>{}</a:t></a:r></a:p></p:txBody></p:sp>"#,
             xml(&el.id),
@@ -370,7 +416,9 @@ fn ppt_slide(slide: &Slide) -> String {
             xml(text)
         ));
     }
-    format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree>{sp_tree}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"#)
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree>{sp_tree}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>"#
+    )
 }
 
 fn inch_to_emu(v: f64) -> i64 {
@@ -389,7 +437,8 @@ fn zip_files<'a>(files: Vec<(&'a str, String)>) -> Result<Vec<u8>> {
     let mut cursor = Cursor::new(Vec::new());
     {
         let mut zip = zip::ZipWriter::new(&mut cursor);
-        let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         for (path, body) in files {
             zip.start_file(path, options)?;
             zip.write_all(body.as_bytes())?;
@@ -408,7 +457,9 @@ mod tests {
     fn json_compile_works() {
         let ir = DocIR::Word { blocks: Vec::new() };
         let bytes = compile_to_buffer(&ir, ExportFormat::Json, None).unwrap();
-        assert!(String::from_utf8(bytes).unwrap().contains("\"type\": \"word\""));
+        assert!(String::from_utf8(bytes)
+            .unwrap()
+            .contains("\"type\": \"word\""));
     }
 
     #[test]

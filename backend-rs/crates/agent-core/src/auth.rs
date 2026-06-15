@@ -11,10 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::Sha256;
 
-use crate::contracts::models::{new_id, now_ts};
-use crate::contracts::{ApiError, ApiResult};
-use crate::infra::store::T_USERS;
-use crate::infra::Store;
+use agent_protocol::models::{new_id, now_ts};
+use agent_protocol::{ApiError, ApiResult};
+use agent_store::store::T_USERS;
+use agent_store::Store;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -30,6 +30,9 @@ struct StoredUser {
     salt_b64: String,
     hash_b64: String,
     created_at: String,
+    /// serde default keeps records written before this field existed readable.
+    #[serde(default)]
+    updated_at: String,
 }
 
 pub struct AuthService {
@@ -51,10 +54,13 @@ impl AuthService {
         workspace: &str,
     ) -> ApiResult<Value> {
         let email = email.trim().to_lowercase();
-        if email.is_empty() || password.len() < 6 {
+        if !is_valid_email(&email) {
+            return Err(ApiError::new("AUTH_INVALID_INPUT", "invalid email format"));
+        }
+        if password.len() < 6 {
             return Err(ApiError::new(
                 "AUTH_INVALID_INPUT",
-                "email required and password must be >= 6 chars",
+                "password must be >= 6 chars",
             ));
         }
         if self.find_by_email(&email).is_some() {
@@ -63,28 +69,38 @@ impl AuthService {
                 "email already registered",
             ));
         }
-        let mut salt = [0u8; 16];
-        rand::thread_rng().fill_bytes(&mut salt);
-        let hash = pbkdf2_hash(password.as_bytes(), &salt);
+        let (salt_b64, hash_b64) = make_password_record(password);
+        let now = now_ts();
         let user = StoredUser {
             id: new_id("user"),
             email: email.clone(),
             display_name: display_name.to_string(),
             workspace: workspace.to_string(),
-            salt_b64: B64.encode(salt),
-            hash_b64: B64.encode(hash),
-            created_at: now_ts(),
+            salt_b64,
+            hash_b64,
+            created_at: now.clone(),
+            updated_at: now,
         };
-        let _ = self.store.put(T_USERS, &user.id, &user);
-        let _ = self.store.kv_put(&email_key(&email), &user.id);
+        self.store
+            .put(T_USERS, &user.id, &user)
+            .map_err(|e| ApiError::store(format!("failed to persist user: {e}")))?;
+        self.store
+            .kv_put(&email_key(&email), &user.id)
+            .map_err(|e| ApiError::store(format!("failed to persist email index: {e}")))?;
         Ok(self.auth_payload(&user))
     }
 
     pub fn login(&self, email: &str, password: &str) -> ApiResult<Value> {
         let email = email.trim().to_lowercase();
-        let user = self
-            .find_by_email(&email)
-            .ok_or_else(|| ApiError::new("AUTH_BAD_CREDENTIALS", "invalid email or password"))?;
+        let Some(user) = self.find_by_email(&email) else {
+            // Burn a PBKDF2 round anyway so "unknown email" and "wrong
+            // password" are timing-indistinguishable (user enumeration).
+            let _ = pbkdf2_hash(password.as_bytes(), b"dummy-salt-constant");
+            return Err(ApiError::new(
+                "AUTH_BAD_CREDENTIALS",
+                "invalid email or password",
+            ));
+        };
         let salt = B64
             .decode(&user.salt_b64)
             .map_err(|_| ApiError::new("AUTH_BAD_CREDENTIALS", "corrupt credential"))?;
@@ -121,7 +137,23 @@ impl AuthService {
         if let Some(ws) = patch.get("workspace").and_then(|v| v.as_str()) {
             user.workspace = ws.to_string();
         }
-        let _ = self.store.put(T_USERS, &user.id, &user);
+        if let Some(password) = patch.get("password").and_then(|v| v.as_str()) {
+            if !password.is_empty() {
+                if password.len() < 6 {
+                    return Err(ApiError::new(
+                        "AUTH_INVALID_INPUT",
+                        "password must be >= 6 chars",
+                    ));
+                }
+                let (salt_b64, hash_b64) = make_password_record(password);
+                user.salt_b64 = salt_b64;
+                user.hash_b64 = hash_b64;
+            }
+        }
+        user.updated_at = now_ts();
+        self.store
+            .put(T_USERS, &user.id, &user)
+            .map_err(|e| ApiError::store(format!("failed to persist profile: {e}")))?;
         Ok(json!({ "user": public_user(&user) }))
     }
 
@@ -181,7 +213,32 @@ fn public_user(user: &StoredUser) -> Value {
         "displayName": user.display_name,
         "workspace": user.workspace,
         "createdAt": user.created_at,
+        "updatedAt": user.updated_at,
     })
+}
+
+/// Pragmatic email shape check (parity with the Python `^[^@\s]+@[^@\s]+\.[^@\s]+$`).
+fn is_valid_email(email: &str) -> bool {
+    if email.is_empty() || email.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = email.split_once('@') else {
+        return false;
+    };
+    if local.is_empty() || domain.is_empty() || domain.contains('@') {
+        return false;
+    }
+    match domain.rsplit_once('.') {
+        Some((host, tld)) => !host.is_empty() && !tld.is_empty(),
+        None => false,
+    }
+}
+
+fn make_password_record(password: &str) -> (String, String) {
+    let mut salt = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut salt);
+    let hash = pbkdf2_hash(password.as_bytes(), &salt);
+    (B64.encode(salt), B64.encode(hash))
 }
 
 fn pbkdf2_hash(password: &[u8], salt: &[u8]) -> [u8; 32] {
@@ -216,6 +273,12 @@ fn load_or_create_secret(path: &std::path::PathBuf) -> Vec<u8> {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(path, &secret);
+    if let Err(e) = std::fs::write(path, &secret) {
+        // Tokens minted with an in-memory secret won't survive a restart.
+        tracing::warn!(
+            "auth: failed to persist JWT secret to {}: {e}",
+            path.display()
+        );
+    }
     secret
 }

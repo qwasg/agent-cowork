@@ -2,7 +2,6 @@
 //! consumed by `apps/agent-ide/public/api-client.jsx` and the Tauri shell.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -17,6 +16,11 @@ pub struct DebugSession {
     pub status: String,
     #[serde(default = "default_mode")]
     pub mode: String,
+    /// Agent profile kind: `general` / `document` / `coding`. Drives prompt
+    /// pack, tool whitelist and allowed composer modes. Defaults to `coding`
+    /// so sessions created before this field existed keep their old behavior.
+    #[serde(default = "default_agent_kind")]
+    pub agent_kind: String,
     #[serde(default)]
     pub selected_model_id: Option<String>,
     #[serde(default)]
@@ -41,11 +45,15 @@ fn default_status() -> String {
 fn default_mode() -> String {
     "hybrid".to_string()
 }
+fn default_agent_kind() -> String {
+    "coding".to_string()
+}
 
 impl DebugSession {
     pub fn new(
         id: String,
         title: String,
+        agent_kind: String,
         selected_model_id: Option<String>,
         web_search_enabled: bool,
     ) -> Self {
@@ -55,6 +63,7 @@ impl DebugSession {
             title,
             status: default_status(),
             mode: default_mode(),
+            agent_kind,
             selected_model_id,
             web_search_enabled,
             active_plan_id: None,
@@ -309,6 +318,67 @@ pub struct ToolCall {
 
 fn tool_call_kind() -> String {
     "function".to_string()
+}
+
+/// A durable structured memory entry: cross-session knowledge the agent (or
+/// the user) decided is worth remembering. Retrieved by keyword search and
+/// injected into the system prompt's dynamic block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryEntry {
+    pub id: String,
+    /// `global`, `workspace:{root}` or `session:{id}` — bounds where the
+    /// memory applies.
+    #[serde(default = "memory_default_scope")]
+    pub scope: String,
+    /// `preference` (user style/choices), `fact` (durable facts about the
+    /// project / domain) or `convention` (project rules / conventions).
+    #[serde(default = "memory_default_kind")]
+    pub kind: String,
+    pub content: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// The session that created this memory (when agent-authored).
+    #[serde(default)]
+    pub source_session_id: Option<String>,
+    /// How many times this memory was surfaced via search (recency/usefulness
+    /// signal that also guards capacity eviction).
+    #[serde(default)]
+    pub hits: i64,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+fn memory_default_scope() -> String {
+    "global".to_string()
+}
+fn memory_default_kind() -> String {
+    "fact".to_string()
+}
+
+impl MemoryEntry {
+    pub fn new(
+        scope: String,
+        kind: String,
+        content: String,
+        tags: Vec<String>,
+        source_session_id: Option<String>,
+    ) -> Self {
+        let ts = now_iso();
+        MemoryEntry {
+            id: new_id("mem"),
+            scope,
+            kind,
+            content,
+            tags,
+            source_session_id,
+            hits: 0,
+            created_at: ts.clone(),
+            updated_at: ts,
+        }
+    }
 }
 
 pub fn new_id(prefix: &str) -> String {

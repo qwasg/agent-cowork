@@ -4,7 +4,7 @@
 
 use serde_json::Value;
 
-use crate::contracts::models::{ChatMessage, ToolCall};
+use agent_protocol::models::{ChatMessage, ToolCall};
 
 #[derive(Debug, Clone)]
 pub struct ToolSpec {
@@ -42,6 +42,10 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    /// Prompt tokens served from the provider's prompt cache (OpenAI
+    /// `prompt_tokens_details.cached_tokens` / Anthropic
+    /// `cache_read_input_tokens`).
+    pub cache_read_tokens: u32,
 }
 
 #[derive(Debug, Clone)]

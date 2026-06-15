@@ -1,40 +1,52 @@
-[package]
-name = "agentd"
+[workspace]
+resolver = "2"
+members = [
+    "crates/agent-config",
+    "crates/agent-protocol",
+    "crates/agent-store",
+    "crates/agent-providers",
+    "crates/agent-mcp",
+    "crates/agent-tools",
+    "crates/agent-core",
+    "bins/agentd",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "Rust core service for the Agent Debug backend (rewrite of backend/src/agent_debug)"
 license = "MIT"
 
-[[bin]]
-name = "agentd"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
+# async runtime / streams
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-axum = { version = "0.8", features = ["macros"] }
-tower-http = { version = "0.6", features = ["trace"] }
 futures = "0.3"
 futures-util = "0.3"
 bytes = "1"
 
+# web framework
+axum = { version = "0.8", features = ["macros"] }
+tower-http = { version = "0.6", features = ["trace"] }
+utoipa = "5"
+
+# serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# http client
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "native-tls"] }
 url = "2"
 
+# storage
 redb = "2"
 
+# utils
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-
 thiserror = "1"
 anyhow = "1"
-
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
 async-trait = "0.1"
 
 # crypto (pure Rust, no C toolchain)
@@ -52,9 +64,30 @@ dunce = "1"
 
 dotenvy = "0.15"
 
-[dev-dependencies]
+# test helpers
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+# internal crates
+agent-config = { path = "crates/agent-config" }
+agent-protocol = { path = "crates/agent-protocol" }
+agent-store = { path = "crates/agent-store" }
+agent-providers = { path = "crates/agent-providers" }
+agent-mcp = { path = "crates/agent-mcp" }
+agent-tools = { path = "crates/agent-tools" }
+agent-core = { path = "crates/agent-core" }
+
+# document engine (shared with the sibling `rust/` GPUI workspace) — used by the
+# Office/PDF document tools. docx/pptx IR + OOXML compile; no gpui dependency.
+moonlit-core = { path = "../rust/crates/moonlit-core" }
+moonlit-doccore = { path = "../rust/crates/moonlit-doccore" }
+moonlit-compile = { path = "../rust/crates/moonlit-compile" }
+
+# document tool format libs
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.36"
+pdf-extract = "0.7"
+printpdf = "0.7"
 
 [profile.release]
 opt-level = 2

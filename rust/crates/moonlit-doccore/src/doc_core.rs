@@ -98,11 +98,7 @@ impl DocCore {
         }
     }
 
-    pub fn from_ir(
-        ir: DocIR,
-        id_factory: Arc<dyn IdFactory>,
-        exporter: Option<Exporter>,
-    ) -> Self {
+    pub fn from_ir(ir: DocIR, id_factory: Arc<dyn IdFactory>, exporter: Option<Exporter>) -> Self {
         let doc_type = ir.doc_type();
         let core = Self::new(DocCoreOptions {
             doc_type,
@@ -243,12 +239,11 @@ impl DocCore {
         {
             let mut txn = self.doc.transact_mut_with(origin_local());
             let root = txn.get_or_insert_xml_fragment("word");
-            let idx = find_block_index(&txn, &root, range_id).ok_or_else(|| {
-                DocCoreError::NotFound {
+            let idx =
+                find_block_index(&txn, &root, range_id).ok_or_else(|| DocCoreError::NotFound {
                     op: "replace_text",
                     id: range_id.to_string(),
-                }
-            })?;
+                })?;
             let Some(XmlOut::Element(el)) = root.get(&txn, idx as u32) else {
                 return Err(DocCoreError::NotFound {
                     op: "replace_text",
@@ -273,12 +268,11 @@ impl DocCore {
         {
             let mut txn = self.doc.transact_mut_with(origin_local());
             let root = txn.get_or_insert_xml_fragment("word");
-            let idx = find_block_index(&txn, &root, range_id).ok_or_else(|| {
-                DocCoreError::NotFound {
+            let idx =
+                find_block_index(&txn, &root, range_id).ok_or_else(|| DocCoreError::NotFound {
                     op: "apply_style",
                     id: range_id.to_string(),
-                }
-            })?;
+                })?;
             let Some(XmlOut::Element(el)) = root.get(&txn, idx as u32) else {
                 return Err(DocCoreError::NotFound {
                     op: "apply_style",
@@ -314,8 +308,14 @@ impl DocCore {
                 let mut props = seed.props.clone();
                 props.insert("role".to_string(), Value::String(seed.role.to_string()));
                 let el = MapPrelim::from_iter([
-                    ("id", In::from(Any::String(self.id_factory.next("el").into()))),
-                    ("type", In::from(Any::String(element_type_str(seed.element_type).into()))),
+                    (
+                        "id",
+                        In::from(Any::String(self.id_factory.next("el").into())),
+                    ),
+                    (
+                        "type",
+                        In::from(Any::String(element_type_str(seed.element_type).into())),
+                    ),
                     ("geo", In::from(geo_prelim(&seed.geo))),
                     ("props", In::from(props_prelim(&props))),
                 ]);
@@ -343,7 +343,8 @@ impl DocCore {
         {
             let mut txn = self.doc.transact_mut_with(origin_local());
             let root = txn.get_or_insert_array("ppt");
-            let props_map = locate_element_child(&txn, &root, slide_id, el_id, "props", "edit_element")?;
+            let props_map =
+                locate_element_child(&txn, &root, slide_id, el_id, "props", "edit_element")?;
             for (key, value) in props {
                 if value.is_null() {
                     props_map.remove(&mut txn, &key);
@@ -361,7 +362,8 @@ impl DocCore {
         {
             let mut txn = self.doc.transact_mut_with(origin_local());
             let root = txn.get_or_insert_array("ppt");
-            let geo_map = locate_element_child(&txn, &root, slide_id, el_id, "geo", "move_element")?;
+            let geo_map =
+                locate_element_child(&txn, &root, slide_id, el_id, "geo", "move_element")?;
             if let Some(x) = geo.x {
                 geo_map.insert(&mut txn, "x", Any::Number(x));
             }
@@ -385,7 +387,10 @@ impl DocCore {
     /* ------------------------------ export -------------------------- */
 
     pub fn export(&self, format: ExportFormat) -> Result<String> {
-        let exporter = self.exporter.as_ref().ok_or(DocCoreError::MissingExporter)?;
+        let exporter = self
+            .exporter
+            .as_ref()
+            .ok_or(DocCoreError::MissingExporter)?;
         exporter(&self.read_document(), format)
     }
 
@@ -399,12 +404,17 @@ impl DocCore {
 
     /// Apply a remote `update_v1` payload (e.g. from the sync server / Yjs).
     pub fn apply_update(&self, update: &[u8]) -> Result<()> {
-        let update = Update::decode_v1(update)
-            .map_err(|e| DocCoreError::NotFound { op: "apply_update", id: e.to_string() })?;
+        let update = Update::decode_v1(update).map_err(|e| DocCoreError::NotFound {
+            op: "apply_update",
+            id: e.to_string(),
+        })?;
         {
             let mut txn = self.doc.transact_mut_with(origin_remote());
             txn.apply_update(update)
-                .map_err(|e| DocCoreError::NotFound { op: "apply_update", id: e.to_string() })?;
+                .map_err(|e| DocCoreError::NotFound {
+                    op: "apply_update",
+                    id: e.to_string(),
+                })?;
         }
         self.emit(DocChangeOrigin::Remote);
         Ok(())
@@ -434,7 +444,10 @@ impl DocCore {
         let mut next = self.next_observer_id.lock().unwrap();
         *next += 1;
         let id = *next;
-        self.callbacks.lock().unwrap().push((id, Arc::new(callback)));
+        self.callbacks
+            .lock()
+            .unwrap()
+            .push((id, Arc::new(callback)));
         id
     }
 
@@ -469,7 +482,10 @@ impl DocCore {
                         .map(|el| {
                             In::from(MapPrelim::from_iter([
                                 ("id", In::from(Any::String(el.id.clone().into()))),
-                                ("type", In::from(Any::String(element_type_str(el.element_type).into()))),
+                                (
+                                    "type",
+                                    In::from(Any::String(element_type_str(el.element_type).into())),
+                                ),
                                 ("geo", In::from(geo_prelim(&el.geo))),
                                 ("props", In::from(props_prelim(&el.props))),
                             ]))
@@ -492,7 +508,9 @@ impl DocCore {
         let root = txn.get_or_insert_xml_fragment("word");
         let index = match after_id {
             None => 0,
-            Some(after) => find_block_index(&txn, &root, after).map(|i| i + 1).unwrap_or(0),
+            Some(after) => find_block_index(&txn, &root, after)
+                .map(|i| i + 1)
+                .unwrap_or(0),
         };
         let tag = match block.block_type {
             WordBlockType::Heading => "heading",
@@ -769,7 +787,9 @@ fn number_value(n: f64) -> Value {
     if n.is_finite() && n.fract() == 0.0 && n.abs() < 1e15 {
         Value::from(n as i64)
     } else {
-        serde_json::Number::from_f64(n).map(Value::Number).unwrap_or(Value::Null)
+        serde_json::Number::from_f64(n)
+            .map(Value::Number)
+            .unwrap_or(Value::Null)
     }
 }
 
@@ -779,7 +799,9 @@ fn value_to_any(value: &Value) -> Any {
         Value::Bool(b) => Any::Bool(*b),
         Value::Number(n) => Any::Number(n.as_f64().unwrap_or(0.0)),
         Value::String(s) => Any::String(s.as_str().into()),
-        Value::Array(items) => Any::Array(items.iter().map(value_to_any).collect::<Vec<_>>().into()),
+        Value::Array(items) => {
+            Any::Array(items.iter().map(value_to_any).collect::<Vec<_>>().into())
+        }
         Value::Object(obj) => Any::Map(Arc::new(
             obj.iter()
                 .map(|(k, v)| (k.clone(), value_to_any(v)))
@@ -905,10 +927,11 @@ fn locate_element_child<T: ReadTxn>(
     child: &'static str,
     op: &'static str,
 ) -> Result<MapRef> {
-    let slide_idx = find_slide_index(txn, root, slide_id).ok_or_else(|| DocCoreError::NotFound {
-        op,
-        id: slide_id.to_string(),
-    })?;
+    let slide_idx =
+        find_slide_index(txn, root, slide_id).ok_or_else(|| DocCoreError::NotFound {
+            op,
+            id: slide_id.to_string(),
+        })?;
     let Some(Out::YMap(slide_map)) = root.get(txn, slide_idx) else {
         return Err(DocCoreError::NotFound {
             op,

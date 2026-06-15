@@ -172,7 +172,9 @@ mod tests {
         let store = ConfigStore::open(&path).unwrap();
         assert_eq!(store.api_base_url(), DEFAULT_API_BASE_URL);
 
-        store.set_string(keys::API_BASE_URL, "http://localhost:9999").unwrap();
+        store
+            .set_string(keys::API_BASE_URL, "http://localhost:9999")
+            .unwrap();
         store.set(keys::AUTO_APPROVE, json!(true)).unwrap();
 
         // Reload from disk to verify persistence.

@@ -47,7 +47,10 @@ impl SyncClient {
         let observer_tx = out_tx.clone();
         let subscription = doc
             .observe_update_v1(move |txn, event| {
-                let is_remote = txn.origin().map(|o| o.as_ref() == REMOTE_ORIGIN.as_bytes()).unwrap_or(false);
+                let is_remote = txn
+                    .origin()
+                    .map(|o| o.as_ref() == REMOTE_ORIGIN.as_bytes())
+                    .unwrap_or(false);
                 if is_remote {
                     return;
                 }
@@ -102,14 +105,19 @@ impl SyncClient {
 }
 
 /// Apply an incoming y-sync message to `doc`, returning an optional reply.
-fn handle_message(doc: &Doc, bytes: &[u8], on_change: &(dyn Fn() + Send + Sync)) -> Option<Vec<u8>> {
+fn handle_message(
+    doc: &Doc,
+    bytes: &[u8],
+    on_change: &(dyn Fn() + Send + Sync),
+) -> Option<Vec<u8>> {
     let msg = Message::decode_v1(bytes).ok()?;
     match msg {
         Message::Sync(SyncMessage::SyncStep1(sv)) => {
             let update = doc.transact().encode_state_as_update_v1(&sv);
             Some(Message::Sync(SyncMessage::SyncStep2(update)).encode_v1())
         }
-        Message::Sync(SyncMessage::SyncStep2(update)) | Message::Sync(SyncMessage::Update(update)) => {
+        Message::Sync(SyncMessage::SyncStep2(update))
+        | Message::Sync(SyncMessage::Update(update)) => {
             if let Ok(update) = Update::decode_v1(&update) {
                 let mut txn = doc.transact_mut_with(REMOTE_ORIGIN.to_string());
                 if txn.apply_update(update).is_ok() {

@@ -41,6 +41,16 @@ pub fn sh1() -> Vec<BoxShadow> {
     ]
 }
 
+/// Opaque floating surface: occludes siblings beneath, solid panel, border, shadow.
+pub fn float_surface(t: &Tokens) -> Div {
+    div()
+        .occlude()
+        .border_1()
+        .border_color(t.line_strong)
+        .bg(t.bg_float)
+        .shadow(sh_float())
+}
+
 /// `--sh-float`: 0 12px 40px rgba(42,39,36,0.14), 0 0 0 1px rgba(42,39,36,0.06)
 pub fn sh_float() -> Vec<BoxShadow> {
     vec![
@@ -61,7 +71,12 @@ pub fn sh_float() -> Vec<BoxShadow> {
 
 /// A 6x6 status dot (`.status-dot`).
 pub fn status_dot(color: Rgba) -> Div {
-    div().w(px(6.)).h(px(6.)).rounded_full().bg(color).flex_none()
+    div()
+        .w(px(6.))
+        .h(px(6.))
+        .rounded_full()
+        .bg(color)
+        .flex_none()
 }
 
 /// Running status dot with the legacy 1.6s pulse.
@@ -216,10 +231,16 @@ pub fn menu_item(icon_name: &'static str, label: &'static str, active: bool, t: 
         .rounded(px(6.))
         .text_size(px(12.))
         .text_color(if active { t.accent } else { t.text_2 })
-        .when(active, |d| d.font_weight(gpui::FontWeight::SEMIBOLD).bg(t.accent_bg))
+        .when(active, |d| {
+            d.font_weight(gpui::FontWeight::SEMIBOLD).bg(t.accent_bg)
+        })
         .cursor_pointer()
         .hover(move |s| s.bg(t.bg_selection).text_color(t.accent))
-        .child(icon(icon_name, 13., if active { t.accent } else { t.text_3 }))
+        .child(icon(
+            icon_name,
+            13.,
+            if active { t.accent } else { t.text_3 },
+        ))
         .child(div().flex_1().child(label))
 }
 
@@ -263,7 +284,15 @@ pub fn pane_divider(
                 .bg(t.bg_panel)
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover_bg))
-                .child(icon(if collapsed { "chevron-right" } else { "chevron-left" }, 9., t.text_3))
+                .child(icon(
+                    if collapsed {
+                        "chevron-right"
+                    } else {
+                        "chevron-left"
+                    },
+                    9.,
+                    t.text_3,
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _ev: &MouseDownEvent, window, cx| {

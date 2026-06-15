@@ -3,14 +3,18 @@
 //! are either summarized via the LLM (preferred, port of
 //! `context_compactor.py`) or hard-dropped as a fallback.
 
-use crate::contracts::models::ChatMessage;
-use crate::provider::tokens::estimate_tokens;
-use crate::provider::types::{noop_sink, ProviderRequest};
-use crate::provider::ProviderExecutionService;
+use agent_protocol::models::ChatMessage;
+use agent_providers::tokens::estimate_tokens;
+use agent_providers::types::{noop_sink, ProviderRequest};
+use agent_providers::ProviderExecutionService;
 
 const KEEP_TAIL: usize = 6;
 /// Cap on the transcript fed to the summarizer (chars).
 const SUMMARY_INPUT_MAX_CHARS: usize = 24_000;
+/// Tool-result decay: never touch the most recent N messages…
+const DECAY_KEEP_RECENT: usize = 8;
+/// …and only decay tool results larger than this (chars).
+const DECAY_MIN_CHARS: usize = 1_500;
 
 /// Token estimate for one message, including tool-call payloads (the previous
 /// version ignored `tool_calls`, under-counting tool-heavy contexts).
@@ -50,18 +54,65 @@ pub fn compact(messages: &mut Vec<ChatMessage>, budget_tokens: usize) {
     }
 }
 
-/// LLM-summary compaction: replace the oldest middle turns with a structured
-/// summary message, falling back to hard truncation if summarization fails
-/// (or only mock is available).
+/// Stage 1 of compaction: "decay" older oversized tool results into short
+/// placeholders (the agent can always re-run the tool). Returns how many
+/// messages were decayed.
+pub fn decay_tool_results(messages: &mut [ChatMessage]) -> usize {
+    let cutoff = messages.len().saturating_sub(DECAY_KEEP_RECENT);
+    let mut decayed = 0usize;
+    for m in messages.iter_mut().take(cutoff) {
+        if m.role != "tool" {
+            continue;
+        }
+        let chars = m.content.chars().count();
+        if chars <= DECAY_MIN_CHARS {
+            continue;
+        }
+        let head: String = m.content.chars().take(160).collect();
+        m.content = format!(
+            "[较早的工具结果已省略（原 {chars} 字符）。如仍需要该内容请重新调用相应工具。\
+             开头片段：{head}…]"
+        );
+        decayed += 1;
+    }
+    decayed
+}
+
+/// What a compaction pass actually did (None ⇒ context was under budget).
+pub struct CompactionReport {
+    /// Older tool results replaced with placeholders.
+    pub decayed: usize,
+    /// LLM summary that replaced the oldest middle turns (if any).
+    pub summary: Option<String>,
+    pub before_tokens: usize,
+    pub after_tokens: usize,
+}
+
+/// Compaction pipeline: tool-result decay first, then LLM summary of the
+/// oldest middle turns, hard truncation as the last resort.
 pub async fn compact_with_summary(
     providers: &ProviderExecutionService,
     model: &str,
     messages: &mut Vec<ChatMessage>,
     budget_tokens: usize,
-) {
-    if messages_tokens(messages) <= budget_tokens {
-        return;
+) -> Option<CompactionReport> {
+    let before_tokens = messages_tokens(messages);
+    if before_tokens <= budget_tokens {
+        return None;
     }
+
+    // Stage 1: decay older oversized tool results (cheapest, most precise).
+    let decayed = decay_tool_results(messages);
+    if messages_tokens(messages) <= budget_tokens {
+        return Some(CompactionReport {
+            decayed,
+            summary: None,
+            before_tokens,
+            after_tokens: messages_tokens(messages),
+        });
+    }
+
+    let mut summary_text: Option<String> = None;
     let keep_tail = KEEP_TAIL.min(messages.len().saturating_sub(1));
     let cut = messages.len() - keep_tail;
     // Need at least a few middle messages for a summary to be worthwhile.
@@ -77,9 +128,7 @@ pub async fn compact_with_summary(
         let req = ProviderRequest {
             model: model.to_string(),
             messages: vec![
-                ChatMessage::system(
-                    "你是上下文压缩器。请把下面的对话历史压缩为结构化要点：已完成的事项、关键决策、重要文件/路径、未解决的问题。直接输出要点，不要其它说明。",
-                ),
+                ChatMessage::system(crate::prompts::COMPACTION_SYSTEM_PROMPT),
                 ChatMessage::user(transcript),
             ],
             tools: vec![],
@@ -90,20 +139,27 @@ pub async fn compact_with_summary(
         let sink = noop_sink();
         if let Ok(resp) = providers.execute(&req, &sink, None).await {
             if !resp.degraded && !resp.text.trim().is_empty() {
-                let summary =
-                    ChatMessage::system(format!("（早前对话的压缩摘要）\n{}", resp.text.trim()));
+                let text = resp.text.trim().to_string();
+                let summary = ChatMessage::system(format!("（早前对话的压缩摘要）\n{text}"));
                 messages.splice(1..cut, [summary]);
+                summary_text = Some(text);
             }
         }
     }
     // Whatever happened above, guarantee we end up under budget.
     compact(messages, budget_tokens);
+    Some(CompactionReport {
+        decayed,
+        summary: summary_text,
+        before_tokens,
+        after_tokens: messages_tokens(messages),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::models::ToolCall;
+    use agent_protocol::models::ToolCall;
 
     fn msg(role: &str, content: &str) -> ChatMessage {
         ChatMessage::simple(role, content)
@@ -125,7 +181,10 @@ mod tests {
     fn compact_keeps_system_and_tail() {
         let mut messages = vec![msg("system", "sys")];
         for i in 0..50 {
-            messages.push(msg("user", &format!("message number {i} {}", "x".repeat(400))));
+            messages.push(msg(
+                "user",
+                &format!("message number {i} {}", "x".repeat(400)),
+            ));
         }
         let last = messages.last().unwrap().content.clone();
         compact(&mut messages, 500);
@@ -139,5 +198,26 @@ mod tests {
         let mut messages = vec![msg("system", "sys"), msg("user", "hello")];
         compact(&mut messages, 10_000);
         assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn decay_replaces_old_large_tool_results_only() {
+        let mut messages = vec![msg("system", "sys")];
+        // Old large tool result (will decay).
+        messages.push(msg("tool", &"x".repeat(5_000)));
+        // Old small tool result (kept).
+        messages.push(msg("tool", "short result"));
+        // Filler so the large one falls outside the recent window.
+        for i in 0..10 {
+            messages.push(msg("user", &format!("m{i}")));
+        }
+        // Recent large tool result (kept — inside the recent window).
+        messages.push(msg("tool", &"y".repeat(5_000)));
+
+        let decayed = decay_tool_results(&mut messages);
+        assert_eq!(decayed, 1);
+        assert!(messages[1].content.contains("已省略"));
+        assert_eq!(messages[2].content, "short result");
+        assert!(messages.last().unwrap().content.len() >= 5_000);
     }
 }

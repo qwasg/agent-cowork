@@ -6,7 +6,10 @@ pub type Result<T> = std::result::Result<T, DocCoreError>;
 #[derive(Debug, thiserror::Error)]
 pub enum DocCoreError {
     #[error("mutation is only valid for {expected}, current document type is {actual}")]
-    WrongType { expected: &'static str, actual: DocType },
+    WrongType {
+        expected: &'static str,
+        actual: DocType,
+    },
     #[error("{op}: id not found: {id}")]
     NotFound { op: &'static str, id: String },
     #[error("export: no exporter configured")]

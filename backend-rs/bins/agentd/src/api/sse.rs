@@ -14,8 +14,8 @@ use futures::stream::{self, Stream, StreamExt};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::api::gateway::AppServices;
-use crate::contracts::events::DebugEvent;
+use crate::api::AppServices;
+use agent_protocol::events::DebugEvent;
 
 fn to_sse(ev: &DebugEvent) -> Event {
     let data = serde_json::to_string(&ev.to_wire()).unwrap_or_default();
